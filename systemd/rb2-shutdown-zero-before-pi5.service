@@ -1,0 +1,16 @@
+[Unit]
+Description=RB2 - Shutdown Zero 2 W before Pi 5 poweroff
+DefaultDependencies=no
+After=network-online.target
+Wants=network-online.target
+Before=shutdown.target reboot.target halt.target poweroff.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/sbin/rb2-shutdown-zero-before-pi5.sh
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

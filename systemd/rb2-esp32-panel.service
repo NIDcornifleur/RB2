@@ -1,0 +1,16 @@
+[Unit]
+Description=RB2 ESP32 control panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/tmp
+ExecStart=/usr/bin/python3 /opt/rb2/esp32_panel.py
+Restart=always
+RestartSec=3
+User=rj
+Group=rj
+
+[Install]
+WantedBy=multi-user.target

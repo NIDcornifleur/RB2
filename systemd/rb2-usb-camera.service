@@ -1,0 +1,16 @@
+[Unit]
+Description=RB2 USB Camera MJPEG Stream
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rj
+Group=video
+ExecStart=/usr/bin/python3 /opt/rb2/rb2_usb_camera.py
+Restart=always
+RestartSec=2
+WorkingDirectory=/opt/rb2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=RB2 AP static IP on Wi-Fi dongle
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ip link set wlxXXXXXXXXXXXX up
+ExecStart=/usr/sbin/ip addr flush dev wlxXXXXXXXXXXXX
+ExecStart=/usr/sbin/ip addr add 10.42.0.1/24 dev wlxXXXXXXXXXXXX
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

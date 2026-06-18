@@ -1,0 +1,16 @@
+[Unit]
+Description=RB2 Web Teleop ROS2
+After=network-online.target rb2-bringup.service
+Wants=network-online.target
+Requires=rb2-bringup.service
+
+[Service]
+Type=simple
+User=rj
+WorkingDirectory=/home/rj/rb2_web
+ExecStart=/home/rj/rb2_web/start_rb2_web_teleop.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=RB2 IMU JSON bridge
+After=network-online.target rb2-bringup.service
+Wants=network-online.target
+Requires=rb2-bringup.service
+
+[Service]
+Type=simple
+User=rj
+WorkingDirectory=/opt/rb2
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && python3 /opt/rb2/rb2_imu_json.py'
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

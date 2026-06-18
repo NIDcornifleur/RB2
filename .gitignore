@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.bak*
+*.tmp
+.DS_Store
+
+# fichiers temporaires RB2
+tmp/
+*.json
+
+# archives et grosses sauvegardes
+*.tar.gz
+*.zip
+
+# secrets éventuels
+.env
+*.key
+*.pem
+id_rsa*

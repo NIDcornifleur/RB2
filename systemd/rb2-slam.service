@@ -1,0 +1,15 @@
+[Unit]
+Description=RB2 SLAM Toolbox Manual Service
+After=network-online.target rb2-bringup.service
+Wants=network-online.target
+Requires=rb2-bringup.service
+
+[Service]
+Type=simple
+User=rj
+WorkingDirectory=/home/rj/rb2_ros2_ws
+ExecStart=/home/rj/rb2_scripts/start_rb2_slam.sh
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
