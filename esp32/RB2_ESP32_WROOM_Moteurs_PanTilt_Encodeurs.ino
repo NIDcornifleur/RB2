@@ -84,11 +84,11 @@ const char* otaPassword = "****";
 const int PAN_PIN  = 19;
 const int TILT_PIN = 18;
 
-const int PAN_MIN = 0;
-const int PAN_MAX = 180;
+const int PAN_MIN = 50;
+const int PAN_MAX = 140;
 
 const int TILT_MIN = 68;
-const int TILT_MAX = 180;
+const int TILT_MAX = 145;
 
 int panPos = 90;
 int tiltPos = 90;
