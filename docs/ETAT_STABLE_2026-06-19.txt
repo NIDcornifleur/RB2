@@ -1,0 +1,10 @@
+RB2 - État stable du 2026-06-19
+
+- ESP32 téléversé avec limites de pan sécurisées.
+- Pan caméra limité entre 50° et 140°.
+- Page web Pi 5 corrigée avec les mêmes limites.
+- Le ruban plat de caméra a été remplacé par un modèle plus flexible.
+- Zero 2 W remplacé après incident de ruban caméra.
+- Page LIDAR fonctionnelle.
+- Contour d'avertissement collision revenu.
+- Ne pas modifier cette base sans sauvegarde préalable.
