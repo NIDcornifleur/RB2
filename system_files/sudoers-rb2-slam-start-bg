@@ -1,0 +1,4 @@
+Cmnd_Alias RB2_SLAM_START_BG = /usr/local/sbin/rb2-slam-start-bg
+rj ALL=(root) NOPASSWD: RB2_SLAM_START_BG
+www-data ALL=(root) NOPASSWD: RB2_SLAM_START_BG
+root ALL=(root) NOPASSWD: RB2_SLAM_START_BG

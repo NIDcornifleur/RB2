@@ -1,0 +1,7 @@
+image: rb2_map_20260620-125016.pgm
+mode: trinary
+resolution: 0.0500000007451
+origin: [-8.66192738387, -6.07452945525, 0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25

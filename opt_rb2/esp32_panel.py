@@ -9489,140 +9489,34 @@ def slam_status():
 @app.route("/slam_start", methods=["POST"])
 def slam_start():
     """
-    Démarrage SLAM robuste pour RB2.
+    Démarrage SLAM rapide pour la page Terrain.
 
-    Problème corrigé : le service rb2-slam.service peut prendre 25 à 40 secondes
-    avant que /slam_toolbox apparaisse. L'ancienne route attendait trop peu et
-    retournait ERREUR même si le service finissait par démarrer.
-
-    Cette route :
-    1. démarre le service;
-    2. attend réellement /slam_toolbox;
-    3. configure si nécessaire;
-    4. active si nécessaire;
-    5. confirme l'état active [3];
-    6. confirme que /map existe dans les topics.
-
-    Elle ne dépend pas d'un echo /map --once obligatoire pour déclarer OK,
-    car le premier message /map peut prendre quelques secondes selon le début
-    de déplacement du robot.
+    Cette route ne bloque plus le navigateur.
+    Elle lance un script en arrière-plan qui démarre rb2-slam.service,
+    configure slam_toolbox et l'active.
+    Le suivi réel se fait ensuite par /slam_status.
     """
     import subprocess
-    import time
 
-    def ros_cmd(cmd, timeout=12):
-        return rb2_ros_cmd(cmd, timeout=timeout)
+    try:
+        subprocess.Popen(
+            ["sudo", "-n", "/usr/local/sbin/rb2-slam-start-bg"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
-    start_result = subprocess.run(
-        ["sudo", "-n", "systemctl", "start", "rb2-slam.service"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=15,
-        check=False,
-    )
-
-    if start_result.returncode != 0:
         return jsonify({
-            "ok": False,
-            "error": "Échec du démarrage de rb2-slam.service",
-            "start_returncode": start_result.returncode,
-            "start_stdout": start_result.stdout,
-            "start_stderr": start_result.stderr,
+            "ok": True,
+            "pending": True,
+            "message": "Démarrage SLAM lancé en arrière-plan. Suivre l'état avec /slam_status.",
         })
 
-    # Attendre longtemps : sur RB2, les journaux ont montré environ 28 à 34 s
-    # entre systemctl start et l'apparition utile de slam_toolbox.
-    node_seen = False
-    last_nodes = ""
-    for _ in range(90):  # 90 x 0,5 s = 45 s
-        nodes = ros_cmd("ros2 node list", timeout=6)
-        last_nodes = nodes.stdout.strip()
-        if "/slam_toolbox" in last_nodes.splitlines():
-            node_seen = True
-            break
-        time.sleep(0.5)
-
-    if not node_seen:
+    except Exception as e:
         return jsonify({
             "ok": False,
-            "error": "slam_toolbox non détecté après attente prolongée",
-            "start_stdout": start_result.stdout,
-            "start_stderr": start_result.stderr,
-            "nodes": last_nodes,
+            "error": str(e),
         })
-
-    # Attendre que le lifecycle réponde vraiment.
-    state = ""
-    state_result = None
-    for _ in range(30):  # 15 s max
-        state_result = ros_cmd("ros2 lifecycle get /slam_toolbox", timeout=8)
-        state = state_result.stdout.strip()
-        if state:
-            break
-        time.sleep(0.5)
-
-    configure_result = None
-    activate_result = None
-
-    if state.startswith("unconfigured") or "unconfigured [1]" in state:
-        configure_result = ros_cmd("ros2 lifecycle set /slam_toolbox configure", timeout=25)
-        time.sleep(2)
-
-    # Attendre inactive après configure.
-    state_after_configure = ""
-    for _ in range(20):
-        r = ros_cmd("ros2 lifecycle get /slam_toolbox", timeout=8)
-        state_after_configure = r.stdout.strip()
-        if state_after_configure.startswith("inactive") or state_after_configure.startswith("active"):
-            break
-        time.sleep(0.5)
-
-    if state_after_configure.startswith("inactive") or "inactive [2]" in state_after_configure:
-        activate_result = ros_cmd("ros2 lifecycle set /slam_toolbox activate", timeout=25)
-        time.sleep(2)
-
-    # Attendre active après activate.
-    final_state = ""
-    final_state_result = None
-    for _ in range(20):
-        final_state_result = ros_cmd("ros2 lifecycle get /slam_toolbox", timeout=8)
-        final_state = final_state_result.stdout.strip()
-        if final_state.startswith("active") or "active [3]" in final_state:
-            break
-        time.sleep(0.5)
-
-    # Attendre que /map apparaisse dans la liste des topics.
-    map_available = False
-    topics = ""
-    for _ in range(30):  # 15 s max
-        topics_result = ros_cmd("ros2 topic list", timeout=8)
-        topics = topics_result.stdout.strip()
-        if "/map" in topics.splitlines():
-            map_available = True
-            break
-        time.sleep(0.5)
-
-    final_active = final_state.startswith("active") or "active [3]" in final_state
-
-    return jsonify({
-        "ok": bool(final_active and map_available),
-        "state": final_state,
-        "map": map_available,
-        "map_ready": map_available,
-        "start_returncode": start_result.returncode,
-        "start_stdout": start_result.stdout,
-        "start_stderr": start_result.stderr,
-        "initial_lifecycle": state,
-        "state_after_configure": state_after_configure,
-        "configure_returncode": configure_result.returncode if configure_result else None,
-        "configure_stdout": configure_result.stdout if configure_result else "",
-        "configure_stderr": configure_result.stderr if configure_result else "",
-        "activate_returncode": activate_result.returncode if activate_result else None,
-        "activate_stdout": activate_result.stdout if activate_result else "",
-        "activate_stderr": activate_result.stderr if activate_result else "",
-        "topics": topics,
-    })
 
 
 @app.route("/slam_stop", methods=["POST"])

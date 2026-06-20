@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -u
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LOG="/tmp/rb2_slam_start_bg.log"
+
+ros_as_rj() {
+  runuser -u rj -- bash -lc "source /opt/ros/jazzy/setup.bash && source /home/rj/rb2_ros2_ws/install/setup.bash && $*"
+}
+
+{
+  echo
+  echo "=== $(date '+%F %T') : démarrage SLAM background ==="
+
+  echo "--- systemctl start rb2-slam.service ---"
+  systemctl start rb2-slam.service || true
+
+  echo "--- attente /slam_toolbox ---"
+  FOUND=0
+  for i in $(seq 1 90); do
+    if ros_as_rj "ros2 node list 2>/dev/null" | grep -qx "/slam_toolbox"; then
+      echo "/slam_toolbox détecté après ${i} essais"
+      FOUND=1
+      break
+    fi
+    sleep 0.5
+  done
+
+  if [ "$FOUND" -ne 1 ]; then
+    echo "ERREUR : /slam_toolbox non détecté"
+    systemctl status rb2-slam.service --no-pager || true
+    echo "=== fin avec erreur ==="
+    exit 1
+  fi
+
+  echo "--- état lifecycle initial ---"
+  STATE="$(ros_as_rj "ros2 lifecycle get /slam_toolbox 2>/dev/null" || true)"
+  echo "$STATE"
+
+  if echo "$STATE" | grep -q "unconfigured"; then
+    echo "--- configure ---"
+    ros_as_rj "ros2 lifecycle set /slam_toolbox configure" || true
+    sleep 3
+  fi
+
+  echo "--- état après configure ---"
+  STATE2="$(ros_as_rj "ros2 lifecycle get /slam_toolbox 2>/dev/null" || true)"
+  echo "$STATE2"
+
+  if echo "$STATE2" | grep -q "inactive"; then
+    echo "--- activate ---"
+    ros_as_rj "ros2 lifecycle set /slam_toolbox activate" || true
+    sleep 3
+  fi
+
+  echo "--- état final ---"
+  ros_as_rj "ros2 lifecycle get /slam_toolbox 2>/dev/null" || true
+
+  echo "--- topics ---"
+  ros_as_rj "ros2 topic list 2>/dev/null | grep -E '/map|/map_metadata|/pose|/scan|/odom|/imu' || true"
+
+  echo "=== fin background SLAM ==="
+
+} >> "$LOG" 2>&1
+
+exit 0
