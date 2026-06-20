@@ -637,6 +637,7 @@ def rb2_trace_follow_read_current_odom():
     except Exception:
         pass
     values = parse_encoders_from_lines(lines)
+    rb2_write_wheel_ticks_json(values)
     if values.get("FR") is not None:
         values["FR"] = -values["FR"]
     if values.get("RR") is not None:
@@ -2068,7 +2069,7 @@ let driveTimer = null;
 const DRIVE_REPEAT_MS = 250;
 
 let encoderTimer = null;
-const ENCODER_REPEAT_MS = 2000;
+const ENCODER_REPEAT_MS = 500;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -2677,6 +2678,131 @@ TICKS_PER_REV = 10529.0
 TRACK_WIDTH_MM = 225.0
 MM_PER_TICK = (3.141592653589793 * WHEEL_DIAMETER_MM) / TICKS_PER_REV
 
+# === RB2 WHEEL TICKS JSON BRIDGE - BEGIN ===
+# Pont encodeurs ESP32 -> ROS2.
+# Écrit le fichier attendu par rb2_wheel_ticks_json_node :
+# /tmp/rb2_wheel_ticks.json
+#
+# Format :
+# {"ok": true, "stamp": time.time(), "data": [FL, FR, RR, RL]}
+
+import json as _rb2_ticks_json
+import os as _rb2_ticks_os
+import time as _rb2_ticks_time
+
+_RB2_WHEEL_TICKS_JSON_FILE = "/tmp/rb2_wheel_ticks.json"
+
+def rb2_write_wheel_ticks_json(values):
+    try:
+        if not values:
+            return False
+
+        fl = int(values.get("FL") or 0)
+        fr = int(values.get("FR") or 0)
+        rr = int(values.get("RR") or 0)
+        rl = int(values.get("RL") or 0)
+
+        payload = {
+            "ok": True,
+            "stamp": _rb2_ticks_time.time(),
+            "data": [fl, fr, rr, rl],
+        }
+
+        tmp_path = _RB2_WHEEL_TICKS_JSON_FILE + ".tmp"
+
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            _rb2_ticks_json.dump(payload, f)
+
+        _rb2_ticks_os.replace(tmp_path, _RB2_WHEEL_TICKS_JSON_FILE)
+        return True
+
+    except Exception as e:
+        try:
+            with open("/tmp/rb2_wheel_ticks_json_error.log", "a", encoding="utf-8") as f:
+                f.write(f"{_rb2_ticks_time.time():.3f} {e}\n")
+        except Exception:
+            pass
+        return False
+
+# === RB2 WHEEL TICKS JSON BRIDGE - END ===
+
+# === RB2 WHEEL TICKS JSON HEARTBEAT - BEGIN ===
+# Maintient /tmp/rb2_wheel_ticks.json frais entre deux lectures encodeurs.
+# Ne parle pas à l'ESP32. Il réécrit seulement la dernière valeur connue avec un stamp récent.
+# Objectif : éviter les coupures /wheel_ticks et /odom quand les roues sont immobiles.
+
+import threading as _rb2_ticks_threading
+
+_rb2_ticks_last_values = None
+_rb2_ticks_last_lock = _rb2_ticks_threading.Lock()
+_rb2_ticks_heartbeat_started = False
+
+_rb2_write_wheel_ticks_json_original = rb2_write_wheel_ticks_json
+
+def rb2_write_wheel_ticks_json(values):
+    global _rb2_ticks_last_values
+
+    ok = _rb2_write_wheel_ticks_json_original(values)
+
+    if ok and values:
+        try:
+            fl = int(values.get("FL") or 0)
+            fr = int(values.get("FR") or 0)
+            rr = int(values.get("RR") or 0)
+            rl = int(values.get("RL") or 0)
+
+            with _rb2_ticks_last_lock:
+                _rb2_ticks_last_values = {
+                    "FL": fl,
+                    "FR": fr,
+                    "RR": rr,
+                    "RL": rl,
+                }
+        except Exception:
+            pass
+
+    return ok
+
+def _rb2_wheel_ticks_heartbeat_loop():
+    while True:
+        try:
+            with _rb2_ticks_last_lock:
+                values = dict(_rb2_ticks_last_values) if _rb2_ticks_last_values else None
+
+            if values:
+                _rb2_write_wheel_ticks_json_original(values)
+
+        except Exception as e:
+            try:
+                with open("/tmp/rb2_wheel_ticks_heartbeat_error.log", "a", encoding="utf-8") as f:
+                    f.write(f"{_rb2_ticks_time.time():.3f} {e}\n")
+            except Exception:
+                pass
+
+        _rb2_ticks_time.sleep(0.25)
+
+def _rb2_start_wheel_ticks_heartbeat():
+    global _rb2_ticks_heartbeat_started
+
+    if _rb2_ticks_heartbeat_started:
+        return
+
+    _rb2_ticks_heartbeat_started = True
+
+    t = _rb2_ticks_threading.Thread(
+        target=_rb2_wheel_ticks_heartbeat_loop,
+        name="rb2-wheel-ticks-heartbeat",
+        daemon=True,
+    )
+    t.start()
+
+_rb2_start_wheel_ticks_heartbeat()
+
+# === RB2 WHEEL TICKS JSON HEARTBEAT - END ===
+
+
+
+
 
 def compute_odom_from_values(values):
     if not values:
@@ -2933,6 +3059,7 @@ def encoders():
         pass
 
     values = parse_encoders_from_lines(lines)
+    rb2_write_wheel_ticks_json(values)
 
     # Convention RB2 :
     # avance physique = positif
