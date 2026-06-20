@@ -2069,7 +2069,7 @@ let driveTimer = null;
 const DRIVE_REPEAT_MS = 250;
 
 let encoderTimer = null;
-const ENCODER_REPEAT_MS = 500;
+const ENCODER_REPEAT_MS = 2000;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
