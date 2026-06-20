@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -u
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+LOCAL_IF="wlan0"
+AP_IF="wlxXXXXXXXXXXXX"
+ZERO_IF="eth0"
+
+action="${1:-status}"
+
+status_report() {
+  echo "=== RB2 NETWORK MODE STATUS ==="
+  echo
+  echo "--- nmcli device status ---"
+  nmcli device status || true
+  echo
+  echo "--- ip -br addr ---"
+  ip -br addr show lo "$ZERO_IF" "$LOCAL_IF" "$AP_IF" 2>/dev/null || ip -br addr
+  echo
+  echo "--- ping Zero 2 W camera ---"
+  ping -c 1 -W 1 10.50.0.20 >/dev/null 2>&1 && echo "ZERO_ETH=OK" || echo "ZERO_ETH=NO_REPLY"
+}
+
+case "$action" in
+  terrain)
+    echo "Passage en MODE TERRAIN : coupure du Wi-Fi local wlan0."
+    nmcli device disconnect "$LOCAL_IF" >/dev/null 2>&1 || true
+    nmcli device set "$LOCAL_IF" managed no >/dev/null 2>&1 || true
+    ip link set "$LOCAL_IF" down >/dev/null 2>&1 || true
+    echo "MODE_TERRAIN_OK"
+    echo "wlan0 coupé."
+    echo "AP RB2 conservé sur $AP_IF."
+    ;;
+
+  bureau)
+    echo "Passage en MODE BUREAU : réactivation du Wi-Fi local wlan0."
+    ip link set "$LOCAL_IF" up >/dev/null 2>&1 || true
+    nmcli device set "$LOCAL_IF" managed yes >/dev/null 2>&1 || true
+    sleep 1
+    nmcli device connect "$LOCAL_IF" >/dev/null 2>&1 || true
+
+    if ! ip -4 addr show "$LOCAL_IF" 2>/dev/null | grep -q "inet "; then
+      while IFS=: read -r name type; do
+        [ "$type" = "802-11-wireless" ] || continue
+        nmcli connection up "$name" ifname "$LOCAL_IF" >/dev/null 2>&1 && break
+      done < <(nmcli -t -f NAME,TYPE connection show)
+    fi
+
+    echo "MODE_BUREAU_REQUESTED"
+    echo "wlan0 réactivé si un profil Wi-Fi local valide existe."
+    echo "AP RB2 conservé sur $AP_IF."
+    ;;
+
+  status)
+    status_report
+    ;;
+
+  *)
+    echo "Usage: $0 {terrain|bureau|status}" >&2
+    exit 2
+    ;;
+esac
+
+exit 0

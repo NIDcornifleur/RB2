@@ -1,0 +1,4 @@
+Cmnd_Alias RB2_WIFI_MODE = /usr/local/sbin/rb2-wifi-mode *
+rj ALL=(root) NOPASSWD: RB2_WIFI_MODE
+www-data ALL=(root) NOPASSWD: RB2_WIFI_MODE
+root ALL=(root) NOPASSWD: RB2_WIFI_MODE

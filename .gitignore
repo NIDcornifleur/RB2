@@ -19,3 +19,5 @@ tmp/
 *.key
 *.pem
 id_rsa*
+*.bak
+esp32_panel.py.bak-*
