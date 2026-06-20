@@ -4882,7 +4882,7 @@ TERRAIN_HTML = """
         <span class="rb2-camera-info-muted">Créé par Roméo St-Cyr en  juin 2026</span>
         <span class="rb2-camera-info-sep">--</span>
         <span class="rb2-camera-info-state" id="rb2CameraInfoState">État RB2 : vérification...</span>
-        <span style="float:right;display:inline-flex;gap:5px;margin-left:10px;align-items:center;">
+        <span style="float:right;display:inline-flex;gap:4px;margin-left:4px;align-items:center;position:relative;right:85px;z-index:999999;pointer-events:auto;">
           <button id="rb2StatusShutdownBtn"
                   onclick="rb2ShutdownAllDirect()"
                   style="padding:3px 9px;height:23px;min-width:74px;border-radius:7px;border:1px solid #ff4040;background:#b00000;color:#fff;font-size:10px;font-weight:900;cursor:pointer;">
@@ -4896,14 +4896,20 @@ TERRAIN_HTML = """
                   style="padding:3px 8px;height:23px;min-width:58px;border-radius:7px;border:1px solid #065f46;background:#047857;color:#fff;font-size:10px;font-weight:900;cursor:pointer;">
             CAMÉRA
           </button>
+          <button id="rb2RetourWifiBtn"
+                  type="button"
+                  onclick="rb2RetourWifiToggleFinal(); return false;"
+                  title="Armer/désarmer le retour Wi-Fi"
+                  style="position:relative;z-index:999999;pointer-events:auto;padding:3px 8px;height:23px;min-width:72px;border-radius:7px;border:1px solid #38bdf8;background:#0f2a3a;color:#bdefff;font-size:10px;font-weight:900;cursor:pointer;">
+            Retour WiFi
+          </button>
+          
         </span>
       </div>
       <div class="terrain-view-toggle-row" style="display:none;">
         <button id="terrainViewToggleBtn" class="terrain-view-toggle-btn" onclick="toggleTerrainView()">AFFICHAGE : SPLIT</button>
       </div>
-
-
-      <img id="cam" src="" alt="Caméra RB2">
+<img id="cam" src="" alt="Caméra RB2">
       <div id="terrainLidarWrap" class="terrain-lidar-wrap">
         <canvas id="terrainLidarCanvas"></canvas>
         <div class="terrain-lidar-zoom-row">
@@ -6760,6 +6766,114 @@ setTimeout(rb2AddShutdownAllTerrainButton, 1500);
     installButton();
   }
 })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- RB2 : Retour WiFi final topbar -->
+<script>
+window.rb2RetourWifiFinalArmed = false;
+
+window.rb2RetourWifiPaintFinal = function(armed) {
+  const btn = document.getElementById("rb2RetourWifiBtn");
+  if (!btn) return;
+
+  window.rb2RetourWifiFinalArmed = !!armed;
+
+  if (armed) {
+    btn.textContent = "RETOUR";
+    btn.style.borderColor = "#ff4d4d";
+    btn.style.background = "#b00000";
+    btn.style.color = "#ffffff";
+  } else {
+    btn.textContent = "Retour WiFi";
+    btn.style.borderColor = "#38bdf8";
+    btn.style.background = "#0f2a3a";
+    btn.style.color = "#bdefff";
+  }
+};
+
+window.rb2RetourWifiToggleFinal = async function() {
+  const next = !window.rb2RetourWifiFinalArmed;
+  const btn = document.getElementById("rb2RetourWifiBtn");
+
+  if (btn) {
+    btn.textContent = "...";
+  }
+
+  try {
+    const r = await fetch("/wifi_return_arm", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({armed: next})
+    });
+
+    const data = await r.json();
+
+    if (!data || !data.ok) {
+      alert("Erreur Retour WiFi. Voir /tmp/rb2_wifi_return.log");
+      window.rb2RetourWifiPaintFinal(window.rb2RetourWifiFinalArmed);
+      return;
+    }
+
+    window.rb2RetourWifiPaintFinal(!!data.armed);
+
+  } catch (e) {
+    alert("Erreur de communication avec /wifi_return_arm");
+    window.rb2RetourWifiPaintFinal(window.rb2RetourWifiFinalArmed);
+  }
+};
+
+window.rb2RetourWifiHeartbeatFinal = async function() {
+  try {
+    await fetch("/operator_heartbeat", {
+      method: "POST",
+      cache: "no-store"
+    });
+  } catch (e) {}
+};
+
+window.rb2RetourWifiPollFinal = async function() {
+  try {
+    const r = await fetch("/wifi_return_status", {cache: "no-store"});
+    const data = await r.json();
+
+    if (data && data.ok) {
+      window.rb2RetourWifiPaintFinal(!!data.armed);
+    }
+  } catch (e) {}
+};
+
+window.rb2RetourWifiStartFinal = function() {
+  if (window.__rb2RetourWifiFinalStarted) return;
+  window.__rb2RetourWifiFinalStarted = true;
+
+  window.rb2RetourWifiHeartbeatFinal();
+  window.rb2RetourWifiPollFinal();
+
+  setInterval(window.rb2RetourWifiHeartbeatFinal, 1000);
+  setInterval(window.rb2RetourWifiPollFinal, 1500);
+};
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", window.rb2RetourWifiStartFinal);
+} else {
+  window.rb2RetourWifiStartFinal();
+}
 </script>
 
 </body>
@@ -9629,6 +9743,114 @@ def slam_status():
         "lifecycle_stderr": lifecycle.stderr,
         "topics_returncode": topics.returncode,
         "topics_stderr": topics.stderr,
+    })
+
+
+
+
+# ============================================================
+# RB2 - Retour Wi-Fi : heartbeat opérateur
+# Phase 1 : détection seulement, aucun mouvement autonome.
+# ============================================================
+
+RB2_OPERATOR_LAST_HEARTBEAT = 0.0
+RB2_WIFI_RETURN_ARMED = False
+RB2_WIFI_RETURN_LOST = False
+RB2_WIFI_RETURN_LAST_EVENT = "initialisé"
+
+
+def rb2_wifi_return_log(msg):
+    import time
+    try:
+        with open("/tmp/rb2_wifi_return.log", "a", encoding="utf-8") as f:
+            f.write(time.strftime("%F %T") + " " + str(msg) + "\\n")
+    except Exception:
+        pass
+
+
+@app.route("/operator_heartbeat", methods=["POST", "GET"])
+def operator_heartbeat():
+    import time
+
+    global RB2_OPERATOR_LAST_HEARTBEAT
+    global RB2_WIFI_RETURN_LOST
+    global RB2_WIFI_RETURN_LAST_EVENT
+
+    RB2_OPERATOR_LAST_HEARTBEAT = time.time()
+
+    if RB2_WIFI_RETURN_LOST:
+        RB2_WIFI_RETURN_LOST = False
+        RB2_WIFI_RETURN_LAST_EVENT = "SIGNAL REVENU"
+        rb2_wifi_return_log("SIGNAL REVENU par heartbeat")
+
+    return jsonify({
+        "ok": True,
+        "armed": RB2_WIFI_RETURN_ARMED,
+        "lost": RB2_WIFI_RETURN_LOST,
+        "last_event": RB2_WIFI_RETURN_LAST_EVENT,
+    })
+
+
+@app.route("/wifi_return_arm", methods=["POST"])
+def wifi_return_arm():
+    import time
+
+    global RB2_WIFI_RETURN_ARMED
+    global RB2_WIFI_RETURN_LOST
+    global RB2_OPERATOR_LAST_HEARTBEAT
+    global RB2_WIFI_RETURN_LAST_EVENT
+
+    data = request.get_json(silent=True) or {}
+    armed = bool(data.get("armed", False))
+
+    RB2_WIFI_RETURN_ARMED = armed
+    RB2_WIFI_RETURN_LOST = False
+    RB2_OPERATOR_LAST_HEARTBEAT = time.time()
+    RB2_WIFI_RETURN_LAST_EVENT = "ARMÉ" if armed else "DÉSARMÉ"
+
+    rb2_wifi_return_log("Retour Wi-Fi " + RB2_WIFI_RETURN_LAST_EVENT)
+
+    return jsonify({
+        "ok": True,
+        "armed": RB2_WIFI_RETURN_ARMED,
+        "lost": RB2_WIFI_RETURN_LOST,
+        "last_event": RB2_WIFI_RETURN_LAST_EVENT,
+    })
+
+
+@app.route("/wifi_return_status", methods=["GET"])
+def wifi_return_status():
+    import time
+
+    global RB2_WIFI_RETURN_LOST
+    global RB2_WIFI_RETURN_LAST_EVENT
+
+    now = time.time()
+
+    if RB2_OPERATOR_LAST_HEARTBEAT > 0:
+        age = now - float(RB2_OPERATOR_LAST_HEARTBEAT)
+    else:
+        age = None
+
+    lost = bool(
+        RB2_WIFI_RETURN_ARMED
+        and RB2_OPERATOR_LAST_HEARTBEAT > 0
+        and age is not None
+        and age > 3.0
+    )
+
+    if lost and not RB2_WIFI_RETURN_LOST:
+        RB2_WIFI_RETURN_LOST = True
+        RB2_WIFI_RETURN_LAST_EVENT = "SIGNAL PERDU"
+        rb2_wifi_return_log("SIGNAL PERDU heartbeat_age_s=" + str(round(age, 2)))
+
+    return jsonify({
+        "ok": True,
+        "armed": RB2_WIFI_RETURN_ARMED,
+        "lost": RB2_WIFI_RETURN_LOST,
+        "heartbeat_age_s": age,
+        "last_event": RB2_WIFI_RETURN_LAST_EVENT,
+        "phase": "phase 1 detection seulement",
     })
 
 
