@@ -1,0 +1,4 @@
+Cmnd_Alias RB2_ZERO_CAM_RESTART = /usr/local/sbin/rb2-zero-cam-restart
+rj ALL=(root) NOPASSWD: RB2_ZERO_CAM_RESTART
+www-data ALL=(root) NOPASSWD: RB2_ZERO_CAM_RESTART
+root ALL=(root) NOPASSWD: RB2_ZERO_CAM_RESTART

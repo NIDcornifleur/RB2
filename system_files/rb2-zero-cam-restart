@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -u
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LOG="/tmp/rb2_zero_cam_restart.log"
+ZERO_IP="10.50.0.20"
+ZERO_USER="rj"
+SERVICE="rb2-zero-cam.service"
+
+{
+  echo
+  echo "=== $(date '+%F %T') : restart caméra Zero ==="
+
+  echo "--- ping Zero ---"
+  ping -c 1 -W 2 "$ZERO_IP" || {
+    echo "ERREUR : Zero $ZERO_IP non joignable"
+    exit 2
+  }
+
+  echo "--- restart $SERVICE ---"
+  runuser -u rj -- ssh \
+    -o BatchMode=yes \
+    -o ConnectTimeout=5 \
+    -o StrictHostKeyChecking=accept-new \
+    "$ZERO_USER@$ZERO_IP" \
+    "sudo -n systemctl restart $SERVICE"
+
+  RC=$?
+  echo "ssh/systemctl return code: $RC"
+
+  if [ "$RC" -ne 0 ]; then
+    echo "ERREUR : restart systemctl refusé ou échoué"
+    exit "$RC"
+  fi
+
+  echo "--- attente retour service caméra ---"
+  OK_STATUS=0
+  OK_STREAM=0
+
+  # Le service Zero a déjà ExecStartPre=/bin/sleep 10.
+  # On attend donc jusqu'à environ 35 secondes.
+  for i in $(seq 1 35); do
+    if curl -fsS --max-time 2 "http://$ZERO_IP:8080/status" >/dev/null 2>&1; then
+      OK_STATUS=1
+      echo "status OK après ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  echo "--- test stream.mjpg ---"
+  for i in $(seq 1 15); do
+    if curl -I --max-time 3 "http://$ZERO_IP:8080/stream.mjpg" >/dev/null 2>&1; then
+      OK_STREAM=1
+      echo "stream.mjpg OK après attente additionnelle ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  echo "--- état final Zero ---"
+  runuser -u rj -- ssh \
+    -o BatchMode=yes \
+    -o ConnectTimeout=5 \
+    -o StrictHostKeyChecking=accept-new \
+    "$ZERO_USER@$ZERO_IP" \
+    "systemctl status $SERVICE --no-pager -l | head -20" || true
+
+  if [ "$OK_STATUS" -eq 1 ] && [ "$OK_STREAM" -eq 1 ]; then
+    echo "RESULTAT : caméra Zero OK"
+    echo "=== fin restart caméra Zero ==="
+    exit 0
+  fi
+
+  echo "ERREUR : caméra Zero pas complètement revenue"
+  echo "OK_STATUS=$OK_STATUS OK_STREAM=$OK_STREAM"
+  echo "=== fin avec erreur ==="
+  exit 3
+
+} >> "$LOG" 2>&1

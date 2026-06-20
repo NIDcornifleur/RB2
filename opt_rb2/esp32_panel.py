@@ -6616,6 +6616,152 @@ setTimeout(rb2AddShutdownAllTerrainButton, 1500);
 })();
 </script>
 
+
+<!-- RB2 : bouton Restart Camera dans la barre du haut -->
+<style>
+  .rb2-restart-camera-top-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 6px 11px;
+    margin-left: 8px;
+    border: 1px solid #ffb347;
+    border-radius: 9px;
+    background: #3a2a10;
+    color: #ffd28a;
+    font-weight: 800;
+    font-size: 13px;
+    line-height: 1;
+    text-decoration: none;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .rb2-restart-camera-top-btn:hover {
+    filter: brightness(1.15);
+  }
+
+  .rb2-restart-camera-top-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
+    filter: none;
+  }
+</style>
+
+<script>
+(function() {
+  if (window.__rb2RestartCameraTopButtonInstalled) return;
+  window.__rb2RestartCameraTopButtonInstalled = true;
+
+  function textOf(el) {
+    return (el && el.textContent ? el.textContent : "").trim().toUpperCase();
+  }
+
+  function findTopBarParent() {
+    const candidates = Array.from(document.querySelectorAll("a, button"));
+    let cameraEl = null;
+    let lidarEl = null;
+    let arretEl = null;
+
+    for (const el of candidates) {
+      const t = textOf(el);
+      if (!cameraEl && (t === "CAMÉRA" || t === "CAMERA" || t.includes("CAMÉRA") || t.includes("CAMERA"))) {
+        cameraEl = el;
+      }
+      if (!lidarEl && t.includes("LIDAR")) {
+        lidarEl = el;
+      }
+      if (!arretEl && (t.includes("ARRÊT RB2") || t.includes("ARRET RB2") || t.includes("ARRÊTER RB2"))) {
+        arretEl = el;
+      }
+    }
+
+    if (cameraEl && lidarEl && cameraEl.parentElement === lidarEl.parentElement) {
+      return { parent: cameraEl.parentElement, after: cameraEl };
+    }
+
+    if (cameraEl) {
+      return { parent: cameraEl.parentElement, after: cameraEl };
+    }
+
+    if (lidarEl) {
+      return { parent: lidarEl.parentElement, after: lidarEl };
+    }
+
+    if (arretEl) {
+      return { parent: arretEl.parentElement, after: arretEl };
+    }
+
+    return null;
+  }
+
+  function installButton() {
+    if (document.getElementById("rb2-restart-camera-top-btn")) return;
+
+    const found = findTopBarParent();
+    if (!found || !found.parent) {
+      console.log("RB2 Restart Camera: barre du haut non trouvée.");
+      return;
+    }
+
+    const btn = document.createElement("button");
+    btn.id = "rb2-restart-camera-top-btn";
+    btn.className = "rb2-restart-camera-top-btn";
+    btn.type = "button";
+    btn.title = "Redémarrer seulement la caméra du Raspberry Pi Zero 2 W";
+    btn.textContent = "Restart Camera";
+
+    found.after.insertAdjacentElement("afterend", btn);
+
+    btn.addEventListener("click", async function() {
+      const ok = confirm("Redémarrer seulement la caméra du Zero 2 W ?");
+      if (!ok) return;
+
+      const oldText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Restart...";
+
+      try {
+        const r = await fetch("/zero_cam_restart", { method: "POST" });
+        const data = await r.json();
+
+        if (data && data.ok) {
+          btn.textContent = "Camera OK";
+          setTimeout(function() {
+            btn.textContent = oldText;
+            btn.disabled = false;
+          }, 3000);
+        } else {
+          btn.textContent = "Erreur";
+          console.log("RB2 zero_cam_restart erreur:", data);
+          alert("La commande a été envoyée, mais une erreur est retournée. Voir /tmp/rb2_zero_cam_restart.log");
+          setTimeout(function() {
+            btn.textContent = oldText;
+            btn.disabled = false;
+          }, 3000);
+        }
+      } catch (e) {
+        btn.textContent = "Erreur";
+        console.log("RB2 zero_cam_restart exception:", e);
+        alert("Erreur de communication avec /zero_cam_restart");
+        setTimeout(function() {
+          btn.textContent = oldText;
+          btn.disabled = false;
+        }, 3000);
+      }
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", installButton);
+  } else {
+    installButton();
+  }
+})();
+</script>
+
 </body>
 </html>
 """
@@ -9484,6 +9630,45 @@ def slam_status():
         "topics_returncode": topics.returncode,
         "topics_stderr": topics.stderr,
     })
+
+
+
+@app.route("/zero_cam_restart", methods=["POST"])
+def zero_cam_restart():
+    """
+    Redémarre seulement le service caméra du Raspberry Pi Zero 2 W.
+    Ne redémarre pas le Pi5, ne touche pas au SLAM, ne touche pas aux moteurs.
+    """
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            ["sudo", "-n", "/usr/local/sbin/rb2-zero-cam-restart"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=75,
+            check=False,
+        )
+
+        return jsonify({
+            "ok": r.returncode == 0,
+            "returncode": r.returncode,
+            "stdout": r.stdout,
+            "stderr": r.stderr,
+        })
+
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            "ok": False,
+            "error": "Timeout pendant le redémarrage caméra Zero",
+        })
+
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+        })
 
 
 @app.route("/slam_start", methods=["POST"])
