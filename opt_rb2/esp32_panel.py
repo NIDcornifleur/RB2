@@ -4882,7 +4882,7 @@ TERRAIN_HTML = """
         <span class="rb2-camera-info-muted">Créé par Roméo St-Cyr en  juin 2026</span>
         <span class="rb2-camera-info-sep">--</span>
         <span class="rb2-camera-info-state" id="rb2CameraInfoState">État RB2 : vérification...</span>
-        <span style="float:right;display:inline-flex;gap:4px;margin-left:4px;align-items:center;position:relative;right:85px;z-index:999999;pointer-events:auto;">
+        <span style="float:right;display:inline-flex;gap:4px;margin-left:4px;align-items:center;position:relative;right:8px;z-index:999999;pointer-events:auto;">
           <button id="rb2StatusShutdownBtn"
                   onclick="rb2ShutdownAllDirect()"
                   style="padding:3px 9px;height:23px;min-width:74px;border-radius:7px;border:1px solid #ff4040;background:#b00000;color:#fff;font-size:10px;font-weight:900;cursor:pointer;">
@@ -4898,8 +4898,8 @@ TERRAIN_HTML = """
           </button>
           <button id="rb2RetourWifiBtn"
                   type="button"
-                  onclick="rb2RetourWifiToggleFinal(); return false;"
-                  title="Armer/désarmer le retour Wi-Fi"
+                  onclick="rb2RetourWifiAckFinal(); return false;"
+                  title="Retour WiFi automatique : bleu = prêt, rouge = retour effectué/en cours"
                   style="position:relative;z-index:999999;pointer-events:auto;padding:3px 8px;height:23px;min-width:72px;border-radius:7px;border:1px solid #38bdf8;background:#0f2a3a;color:#bdefff;font-size:10px;font-weight:900;cursor:pointer;">
             Retour WiFi
           </button>
@@ -6784,17 +6784,21 @@ setTimeout(rb2AddShutdownAllTerrainButton, 1500);
 
 
 
-<!-- RB2 : Retour WiFi final topbar -->
-<script>
-window.rb2RetourWifiFinalArmed = false;
 
-window.rb2RetourWifiPaintFinal = function(armed) {
+
+
+<!-- RB2 : Retour WiFi phase 2A UI -->
+<script>
+window.rb2RetourWifiEventActive = false;
+
+window.rb2RetourWifiPaintPhase2A = function(data) {
   const btn = document.getElementById("rb2RetourWifiBtn");
   if (!btn) return;
 
-  window.rb2RetourWifiFinalArmed = !!armed;
+  const red = !!(data && (data.active || data.done));
+  window.rb2RetourWifiEventActive = red;
 
-  if (armed) {
+  if (red) {
     btn.textContent = "RETOUR";
     btn.style.borderColor = "#ff4d4d";
     btn.style.background = "#b00000";
@@ -6807,38 +6811,26 @@ window.rb2RetourWifiPaintFinal = function(armed) {
   }
 };
 
-window.rb2RetourWifiToggleFinal = async function() {
-  const next = !window.rb2RetourWifiFinalArmed;
-  const btn = document.getElementById("rb2RetourWifiBtn");
-
-  if (btn) {
-    btn.textContent = "...";
-  }
+window.rb2RetourWifiAckFinal = async function() {
+  if (!window.rb2RetourWifiEventActive) return;
 
   try {
-    const r = await fetch("/wifi_return_arm", {
+    const r = await fetch("/wifi_return_ack", {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({armed: next})
+      cache: "no-store"
     });
 
     const data = await r.json();
 
-    if (!data || !data.ok) {
-      alert("Erreur Retour WiFi. Voir /tmp/rb2_wifi_return.log");
-      window.rb2RetourWifiPaintFinal(window.rb2RetourWifiFinalArmed);
-      return;
+    if (data && data.ok) {
+      window.rb2RetourWifiPaintPhase2A(data);
     }
-
-    window.rb2RetourWifiPaintFinal(!!data.armed);
-
   } catch (e) {
-    alert("Erreur de communication avec /wifi_return_arm");
-    window.rb2RetourWifiPaintFinal(window.rb2RetourWifiFinalArmed);
+    alert("Erreur ACK Retour WiFi.");
   }
 };
 
-window.rb2RetourWifiHeartbeatFinal = async function() {
+window.rb2RetourWifiHeartbeatPhase2A = async function() {
   try {
     await fetch("/operator_heartbeat", {
       method: "POST",
@@ -6847,32 +6839,32 @@ window.rb2RetourWifiHeartbeatFinal = async function() {
   } catch (e) {}
 };
 
-window.rb2RetourWifiPollFinal = async function() {
+window.rb2RetourWifiPollPhase2A = async function() {
   try {
     const r = await fetch("/wifi_return_status", {cache: "no-store"});
     const data = await r.json();
 
     if (data && data.ok) {
-      window.rb2RetourWifiPaintFinal(!!data.armed);
+      window.rb2RetourWifiPaintPhase2A(data);
     }
   } catch (e) {}
 };
 
-window.rb2RetourWifiStartFinal = function() {
-  if (window.__rb2RetourWifiFinalStarted) return;
-  window.__rb2RetourWifiFinalStarted = true;
+window.rb2RetourWifiStartPhase2A = function() {
+  if (window.__rb2RetourWifiPhase2AStarted) return;
+  window.__rb2RetourWifiPhase2AStarted = true;
 
-  window.rb2RetourWifiHeartbeatFinal();
-  window.rb2RetourWifiPollFinal();
+  window.rb2RetourWifiHeartbeatPhase2A();
+  window.rb2RetourWifiPollPhase2A();
 
-  setInterval(window.rb2RetourWifiHeartbeatFinal, 1000);
-  setInterval(window.rb2RetourWifiPollFinal, 1500);
+  setInterval(window.rb2RetourWifiHeartbeatPhase2A, 1000);
+  setInterval(window.rb2RetourWifiPollPhase2A, 1500);
 };
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", window.rb2RetourWifiStartFinal);
+  document.addEventListener("DOMContentLoaded", window.rb2RetourWifiStartPhase2A);
 } else {
-  window.rb2RetourWifiStartFinal();
+  window.rb2RetourWifiStartPhase2A();
 }
 </script>
 
@@ -9748,15 +9740,39 @@ def slam_status():
 
 
 
+
 # ============================================================
-# RB2 - Retour Wi-Fi : heartbeat opérateur
-# Phase 1 : détection seulement, aucun mouvement autonome.
+# RB2 - Retour WiFi automatique
+# Phase 2A : sécurité locale autonome sur perte heartbeat.
+#
+# Armé par défaut.
+# Bleu Retour WiFi = prêt.
+# Rouge RETOUR = retour en cours ou retour déjà effectué.
 # ============================================================
 
+import threading as rb2_wifi_return_threading
+
 RB2_OPERATOR_LAST_HEARTBEAT = 0.0
-RB2_WIFI_RETURN_ARMED = False
+
+RB2_WIFI_RETURN_READY = True
+RB2_WIFI_RETURN_ACTIVE = False
+RB2_WIFI_RETURN_DONE = False
 RB2_WIFI_RETURN_LOST = False
-RB2_WIFI_RETURN_LAST_EVENT = "initialisé"
+RB2_WIFI_RETURN_WATCHDOG_STARTED = False
+RB2_WIFI_RETURN_LAST_EVENT = "prêt"
+RB2_WIFI_RETURN_LAST_REASON = ""
+RB2_WIFI_RETURN_LAST_PULSE = 0
+RB2_WIFI_RETURN_LAST_START = 0.0
+RB2_WIFI_RETURN_LAST_END = 0.0
+
+RB2_WIFI_RETURN_LOSS_AFTER_S = 3.0
+RB2_WIFI_RETURN_PULSE_S = 2.0
+RB2_WIFI_RETURN_MAX_PULSES = 5
+RB2_WIFI_RETURN_CMD = "d-20,-20"
+RB2_WIFI_RETURN_SPEED_LEFT = -20
+RB2_WIFI_RETURN_SPEED_RIGHT = -20
+
+RB2_WIFI_RETURN_LOCK = rb2_wifi_return_threading.RLock()
 
 
 def rb2_wifi_return_log(msg):
@@ -9768,24 +9784,262 @@ def rb2_wifi_return_log(msg):
         pass
 
 
+def rb2_wifi_return_heartbeat_age():
+    import time
+    if not RB2_OPERATOR_LAST_HEARTBEAT:
+        return None
+    return time.time() - float(RB2_OPERATOR_LAST_HEARTBEAT)
+
+
+def rb2_wifi_return_signal_present(max_age_s=1.5):
+    age = rb2_wifi_return_heartbeat_age()
+    return age is not None and age <= max_age_s
+
+
+def rb2_wifi_return_stop(reason="STOP retour WiFi"):
+    try:
+        rb2_trace_follow_send_stop_burst()
+        rb2_wifi_return_log(reason + " : d0,0 burst")
+    except Exception as e:
+        rb2_wifi_return_log("ERREUR stop retour WiFi: " + str(e))
+        try:
+            esp32.send("d0,0", wait=0.0)
+        except Exception:
+            pass
+
+
+def rb2_wifi_return_back_allowed():
+    try:
+        allowed, reason = rb2_trace_follow_lidar_allows(
+            RB2_WIFI_RETURN_SPEED_LEFT,
+            RB2_WIFI_RETURN_SPEED_RIGHT,
+        )
+        return bool(allowed), str(reason)
+    except Exception as e:
+        return False, "erreur sécurité LIDAR retour WiFi: " + str(e)
+
+
+def rb2_wifi_return_run():
+    import time
+
+    global RB2_WIFI_RETURN_ACTIVE
+    global RB2_WIFI_RETURN_DONE
+    global RB2_WIFI_RETURN_LOST
+    global RB2_WIFI_RETURN_LAST_EVENT
+    global RB2_WIFI_RETURN_LAST_REASON
+    global RB2_WIFI_RETURN_LAST_PULSE
+    global RB2_WIFI_RETURN_LAST_START
+    global RB2_WIFI_RETURN_LAST_END
+
+    with RB2_WIFI_RETURN_LOCK:
+        if RB2_WIFI_RETURN_ACTIVE:
+            return
+        RB2_WIFI_RETURN_ACTIVE = True
+        RB2_WIFI_RETURN_DONE = True
+        RB2_WIFI_RETURN_LOST = True
+        RB2_WIFI_RETURN_LAST_PULSE = 0
+        RB2_WIFI_RETURN_LAST_START = time.time()
+        RB2_WIFI_RETURN_LAST_END = 0.0
+        RB2_WIFI_RETURN_LAST_EVENT = "RETOUR déclenché"
+        RB2_WIFI_RETURN_LAST_REASON = "heartbeat perdu"
+
+    rb2_wifi_return_log("=== RETOUR WiFi déclenché ===")
+    rb2_wifi_return_stop("STOP initial retour WiFi")
+    time.sleep(0.5)
+
+    for pulse in range(1, RB2_WIFI_RETURN_MAX_PULSES + 1):
+        with RB2_WIFI_RETURN_LOCK:
+            RB2_WIFI_RETURN_LAST_PULSE = pulse
+            RB2_WIFI_RETURN_LAST_EVENT = "RETOUR impulsion " + str(pulse)
+
+        if rb2_wifi_return_signal_present(max_age_s=1.5):
+            rb2_wifi_return_log("signal revenu avant impulsion " + str(pulse))
+            break
+
+        allowed, reason = rb2_wifi_return_back_allowed()
+        rb2_wifi_return_log("sécurité LIDAR arrière avant impulsion " + str(pulse) + " : " + reason)
+
+        if not allowed:
+            with RB2_WIFI_RETURN_LOCK:
+                RB2_WIFI_RETURN_LAST_EVENT = "RETOUR bloqué LIDAR"
+                RB2_WIFI_RETURN_LAST_REASON = reason
+            rb2_wifi_return_stop("STOP retour WiFi bloqué LIDAR")
+            break
+
+        rb2_wifi_return_log("impulsion recul " + str(pulse) + " : " + RB2_WIFI_RETURN_CMD)
+
+        t_end = time.time() + RB2_WIFI_RETURN_PULSE_S
+
+        while time.time() < t_end:
+            if rb2_wifi_return_signal_present(max_age_s=1.5):
+                rb2_wifi_return_log("signal revenu pendant impulsion " + str(pulse))
+                break
+
+            allowed, reason = rb2_wifi_return_back_allowed()
+            if not allowed:
+                rb2_wifi_return_log("recul interrompu par LIDAR : " + reason)
+                with RB2_WIFI_RETURN_LOCK:
+                    RB2_WIFI_RETURN_LAST_EVENT = "RETOUR interrompu LIDAR"
+                    RB2_WIFI_RETURN_LAST_REASON = reason
+                break
+
+            try:
+                esp32.send(RB2_WIFI_RETURN_CMD, wait=0.0)
+            except Exception as e:
+                rb2_wifi_return_log("ERREUR commande recul retour WiFi: " + str(e))
+                with RB2_WIFI_RETURN_LOCK:
+                    RB2_WIFI_RETURN_LAST_EVENT = "ERREUR commande retour"
+                    RB2_WIFI_RETURN_LAST_REASON = str(e)
+                break
+
+            time.sleep(0.35)
+
+        rb2_wifi_return_stop("STOP fin impulsion retour WiFi " + str(pulse))
+        time.sleep(0.35)
+
+        if rb2_wifi_return_signal_present(max_age_s=1.5):
+            rb2_wifi_return_log("signal revenu après impulsion " + str(pulse))
+            with RB2_WIFI_RETURN_LOCK:
+                RB2_WIFI_RETURN_LAST_EVENT = "RETOUR terminé - signal revenu"
+                RB2_WIFI_RETURN_LAST_REASON = "signal revenu"
+            break
+
+    rb2_wifi_return_stop("STOP final retour WiFi")
+
+    with RB2_WIFI_RETURN_LOCK:
+        RB2_WIFI_RETURN_ACTIVE = False
+        RB2_WIFI_RETURN_LAST_END = time.time()
+        if RB2_WIFI_RETURN_LAST_EVENT.startswith("RETOUR impulsion"):
+            RB2_WIFI_RETURN_LAST_EVENT = "RETOUR terminé - limite atteinte"
+            RB2_WIFI_RETURN_LAST_REASON = "limite " + str(RB2_WIFI_RETURN_MAX_PULSES) + " impulsions"
+
+    rb2_wifi_return_log("=== fin RETOUR WiFi ===")
+
+
+def rb2_wifi_return_watchdog_loop():
+    import time
+
+    global RB2_WIFI_RETURN_LOST
+    global RB2_WIFI_RETURN_LAST_EVENT
+    global RB2_WIFI_RETURN_LAST_REASON
+
+    rb2_wifi_return_log("watchdog Retour WiFi phase 2A démarré")
+
+    while True:
+        try:
+            age = rb2_wifi_return_heartbeat_age()
+            trigger = False
+
+            with RB2_WIFI_RETURN_LOCK:
+                if (
+                    RB2_WIFI_RETURN_READY
+                    and not RB2_WIFI_RETURN_ACTIVE
+                    and RB2_OPERATOR_LAST_HEARTBEAT > 0
+                    and age is not None
+                    and age > RB2_WIFI_RETURN_LOSS_AFTER_S
+                ):
+                    trigger = True
+                    RB2_WIFI_RETURN_LOST = True
+                    RB2_WIFI_RETURN_LAST_EVENT = "SIGNAL PERDU"
+                    RB2_WIFI_RETURN_LAST_REASON = "heartbeat_age_s=" + str(round(age, 2))
+
+            if trigger:
+                rb2_wifi_return_log("SIGNAL PERDU age_s=" + str(round(age, 2)))
+                rb2_wifi_return_run()
+
+        except Exception as e:
+            rb2_wifi_return_log("ERREUR watchdog Retour WiFi: " + str(e))
+
+        time.sleep(0.25)
+
+
+def rb2_wifi_return_ensure_watchdog():
+    global RB2_WIFI_RETURN_WATCHDOG_STARTED
+
+    if RB2_WIFI_RETURN_WATCHDOG_STARTED:
+        return
+
+    t = rb2_wifi_return_threading.Thread(
+        target=rb2_wifi_return_watchdog_loop,
+        name="rb2-wifi-return-watchdog",
+        daemon=True,
+    )
+    t.start()
+    RB2_WIFI_RETURN_WATCHDOG_STARTED = True
+
+
 @app.route("/operator_heartbeat", methods=["POST", "GET"])
 def operator_heartbeat():
     import time
 
     global RB2_OPERATOR_LAST_HEARTBEAT
-    global RB2_WIFI_RETURN_LOST
-    global RB2_WIFI_RETURN_LAST_EVENT
 
+    rb2_wifi_return_ensure_watchdog()
     RB2_OPERATOR_LAST_HEARTBEAT = time.time()
 
-    if RB2_WIFI_RETURN_LOST:
-        RB2_WIFI_RETURN_LOST = False
-        RB2_WIFI_RETURN_LAST_EVENT = "SIGNAL REVENU"
-        rb2_wifi_return_log("SIGNAL REVENU par heartbeat")
+    if RB2_WIFI_RETURN_ACTIVE:
+        rb2_wifi_return_stop("STOP heartbeat revenu pendant retour WiFi")
 
     return jsonify({
         "ok": True,
-        "armed": RB2_WIFI_RETURN_ARMED,
+        "armed": True,
+        "ready": RB2_WIFI_RETURN_READY,
+        "active": RB2_WIFI_RETURN_ACTIVE,
+        "done": RB2_WIFI_RETURN_DONE,
+        "lost": RB2_WIFI_RETURN_LOST,
+        "last_event": RB2_WIFI_RETURN_LAST_EVENT,
+        "last_reason": RB2_WIFI_RETURN_LAST_REASON,
+    })
+
+
+@app.route("/wifi_return_status", methods=["GET"])
+def wifi_return_status():
+    rb2_wifi_return_ensure_watchdog()
+
+    age = rb2_wifi_return_heartbeat_age()
+
+    return jsonify({
+        "ok": True,
+        "armed": True,
+        "ready": RB2_WIFI_RETURN_READY,
+        "active": RB2_WIFI_RETURN_ACTIVE,
+        "done": RB2_WIFI_RETURN_DONE,
+        "lost": RB2_WIFI_RETURN_LOST,
+        "heartbeat_age_s": age,
+        "last_event": RB2_WIFI_RETURN_LAST_EVENT,
+        "last_reason": RB2_WIFI_RETURN_LAST_REASON,
+        "last_pulse": RB2_WIFI_RETURN_LAST_PULSE,
+        "loss_after_s": RB2_WIFI_RETURN_LOSS_AFTER_S,
+        "pulse_s": RB2_WIFI_RETURN_PULSE_S,
+        "max_pulses": RB2_WIFI_RETURN_MAX_PULSES,
+        "cmd": RB2_WIFI_RETURN_CMD,
+        "phase": "phase 2A retour automatique limite",
+    })
+
+
+@app.route("/wifi_return_ack", methods=["POST", "GET"])
+def wifi_return_ack():
+    global RB2_WIFI_RETURN_DONE
+    global RB2_WIFI_RETURN_LOST
+    global RB2_WIFI_RETURN_LAST_EVENT
+    global RB2_WIFI_RETURN_LAST_REASON
+
+    rb2_wifi_return_ensure_watchdog()
+
+    with RB2_WIFI_RETURN_LOCK:
+        RB2_WIFI_RETURN_DONE = False
+        RB2_WIFI_RETURN_LOST = False
+        RB2_WIFI_RETURN_LAST_EVENT = "prêt"
+        RB2_WIFI_RETURN_LAST_REASON = ""
+
+    rb2_wifi_return_log("ACK opérateur retour WiFi")
+
+    return jsonify({
+        "ok": True,
+        "armed": True,
+        "ready": RB2_WIFI_RETURN_READY,
+        "active": RB2_WIFI_RETURN_ACTIVE,
+        "done": RB2_WIFI_RETURN_DONE,
         "lost": RB2_WIFI_RETURN_LOST,
         "last_event": RB2_WIFI_RETURN_LAST_EVENT,
     })
@@ -9793,64 +10047,17 @@ def operator_heartbeat():
 
 @app.route("/wifi_return_arm", methods=["POST"])
 def wifi_return_arm():
-    import time
-
-    global RB2_WIFI_RETURN_ARMED
-    global RB2_WIFI_RETURN_LOST
-    global RB2_OPERATOR_LAST_HEARTBEAT
-    global RB2_WIFI_RETURN_LAST_EVENT
-
-    data = request.get_json(silent=True) or {}
-    armed = bool(data.get("armed", False))
-
-    RB2_WIFI_RETURN_ARMED = armed
-    RB2_WIFI_RETURN_LOST = False
-    RB2_OPERATOR_LAST_HEARTBEAT = time.time()
-    RB2_WIFI_RETURN_LAST_EVENT = "ARMÉ" if armed else "DÉSARMÉ"
-
-    rb2_wifi_return_log("Retour Wi-Fi " + RB2_WIFI_RETURN_LAST_EVENT)
+    rb2_wifi_return_ensure_watchdog()
 
     return jsonify({
         "ok": True,
-        "armed": RB2_WIFI_RETURN_ARMED,
+        "armed": True,
+        "ready": RB2_WIFI_RETURN_READY,
+        "active": RB2_WIFI_RETURN_ACTIVE,
+        "done": RB2_WIFI_RETURN_DONE,
         "lost": RB2_WIFI_RETURN_LOST,
         "last_event": RB2_WIFI_RETURN_LAST_EVENT,
-    })
-
-
-@app.route("/wifi_return_status", methods=["GET"])
-def wifi_return_status():
-    import time
-
-    global RB2_WIFI_RETURN_LOST
-    global RB2_WIFI_RETURN_LAST_EVENT
-
-    now = time.time()
-
-    if RB2_OPERATOR_LAST_HEARTBEAT > 0:
-        age = now - float(RB2_OPERATOR_LAST_HEARTBEAT)
-    else:
-        age = None
-
-    lost = bool(
-        RB2_WIFI_RETURN_ARMED
-        and RB2_OPERATOR_LAST_HEARTBEAT > 0
-        and age is not None
-        and age > 3.0
-    )
-
-    if lost and not RB2_WIFI_RETURN_LOST:
-        RB2_WIFI_RETURN_LOST = True
-        RB2_WIFI_RETURN_LAST_EVENT = "SIGNAL PERDU"
-        rb2_wifi_return_log("SIGNAL PERDU heartbeat_age_s=" + str(round(age, 2)))
-
-    return jsonify({
-        "ok": True,
-        "armed": RB2_WIFI_RETURN_ARMED,
-        "lost": RB2_WIFI_RETURN_LOST,
-        "heartbeat_age_s": age,
-        "last_event": RB2_WIFI_RETURN_LAST_EVENT,
-        "phase": "phase 1 detection seulement",
+        "note": "Retour WiFi toujours armé par défaut",
     })
 
 
