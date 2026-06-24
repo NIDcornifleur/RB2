@@ -1,0 +1,15 @@
+[Unit]
+Description=RB2 WiFi dual-loss return watchdog
+After=network-online.target rb2-esp32-panel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/rb2/rb2_wifi_dual_loss_return.py
+Restart=always
+RestartSec=3
+User=rj
+WorkingDirectory=/opt/rb2
+
+[Install]
+WantedBy=multi-user.target

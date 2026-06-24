@@ -312,6 +312,8 @@ def rb2_log_drive_command_to_trace(command_text, left, right, seq=None, token=""
 def rb2_safe_drive_send(command_text, data):
     global DRIVE_LAST_SEQ, DRIVE_LAST_TOKEN, DRIVE_LAST_ACCEPT_TIME, DRIVE_LAST_STOP_TIME
     global DRIVE_LAST_REJECT_TIME, DRIVE_LAST_REJECT_REASON, DRIVE_LAST_REJECT_COMMAND
+    global RB2_WIFI_RETURN_LAST_DRIVE_TIME, RB2_WIFI_RETURN_LAST_DRIVE_COMMAND
+    global RB2_WIFI_RETURN_LAST_DRIVE_LEFT, RB2_WIFI_RETURN_LAST_DRIVE_RIGHT
 
     parsed = rb2_parse_drive_command(command_text)
     if parsed is None:
@@ -413,6 +415,47 @@ def rb2_safe_drive_send(command_text, data):
         DRIVE_LAST_ACCEPT_TIME = now
         if is_stop:
             DRIVE_LAST_STOP_TIME = now
+
+    # Sécurité LIDAR pour toute commande moteur manuelle non-stop.
+    # STOP reste toujours prioritaire et accepté plus haut.
+    if not is_stop:
+        try:
+            lidar_ok, lidar_reason = rb2_trace_follow_lidar_allows(parsed[0], parsed[1])
+        except Exception as e:
+            lidar_ok = False
+            lidar_reason = "erreur garde LIDAR manuel: " + str(e)
+
+        if not lidar_ok:
+            try:
+                rb2_trace_follow_send_stop_burst()
+            except Exception:
+                try:
+                    esp32.send("d0,0", wait=0.0)
+                except Exception:
+                    pass
+
+            return {
+                "ok": False,
+                "command": command_text,
+                "ignored": True,
+                "drive_seq": seq,
+                "last_seq": DRIVE_LAST_SEQ,
+                "age_ms": age_ms,
+                "error": "Commande moteur refusée par sécurité LIDAR: " + str(lidar_reason),
+                "drive_safety": "sécurité LIDAR manuelle",
+            }
+
+    # Mémoriser la dernière vraie commande moteur.
+    # Utilisé par Retour WiFi pour éviter de reculer si /terrain est fermé
+    # alors que le robot ne roulait pas.
+    if not is_stop:
+        try:
+            RB2_WIFI_RETURN_LAST_DRIVE_TIME = time.time()
+            RB2_WIFI_RETURN_LAST_DRIVE_COMMAND = command_text
+            RB2_WIFI_RETURN_LAST_DRIVE_LEFT = parsed[0]
+            RB2_WIFI_RETURN_LAST_DRIVE_RIGHT = parsed[1]
+        except Exception:
+            pass
 
     # Pour les commandes moteur, ne pas attendre une réponse série.
     # Cela évite d'empiler les requêtes Flask pendant la conduite.
@@ -637,6 +680,7 @@ def rb2_trace_follow_read_current_odom():
     except Exception:
         pass
     values = parse_encoders_from_lines(lines)
+    rb2_write_wheel_ticks_json(values)
     if values.get("FR") is not None:
         values["FR"] = -values["FR"]
     if values.get("RR") is not None:
@@ -1969,7 +2013,7 @@ setTimeout(() => {
       <button class="arrow" onclick="panLeft()">◀<br>Pan gauche</button>
 
       <div class="readout">
-        Pan : <span id="panValue">90</span>°<br>
+        Pan : <span id="panValue">95</span>°<br>
         Tilt : <span id="tiltValue">90</span>°
       </div>
 
@@ -1981,14 +2025,14 @@ setTimeout(() => {
     </div>
 
     <div class="row">
-      <button class="small" onclick="setPanTilt(90,90)">Centre 90/90</button>
+      <button class="small" onclick="setPanTilt(95, 90)">Centre 90/90</button>
       <button class="small" onclick="setTiltOnly(145)">Tilt max 145</button>
       <button class="small stop" onclick="setTiltOnly(68)">Tilt min 68</button>
     </div>
 
     <div class="row">
       <button class="small" onclick="setPanOnly(60)">Pan 60</button>
-      <button class="small" onclick="setPanOnly(90)">Pan centre 90</button>
+      <button class="small" onclick="setPanOnly(95)">Pan centre 95</button>
       <button class="small" onclick="setPanOnly(135)">Pan 135</button>
     </div>
 
@@ -2046,7 +2090,7 @@ setTimeout(() => {
 </div>
 
 <script>
-let pan = 90;
+let pan = 95;
 let tilt = 90;
 
 const PAN_NORMAL_MIN = 50;
@@ -2677,6 +2721,131 @@ TICKS_PER_REV = 10529.0
 TRACK_WIDTH_MM = 225.0
 MM_PER_TICK = (3.141592653589793 * WHEEL_DIAMETER_MM) / TICKS_PER_REV
 
+# === RB2 WHEEL TICKS JSON BRIDGE - BEGIN ===
+# Pont encodeurs ESP32 -> ROS2.
+# Écrit le fichier attendu par rb2_wheel_ticks_json_node :
+# /tmp/rb2_wheel_ticks.json
+#
+# Format :
+# {"ok": true, "stamp": time.time(), "data": [FL, FR, RR, RL]}
+
+import json as _rb2_ticks_json
+import os as _rb2_ticks_os
+import time as _rb2_ticks_time
+
+_RB2_WHEEL_TICKS_JSON_FILE = "/tmp/rb2_wheel_ticks.json"
+
+def rb2_write_wheel_ticks_json(values):
+    try:
+        if not values:
+            return False
+
+        fl = int(values.get("FL") or 0)
+        fr = int(values.get("FR") or 0)
+        rr = int(values.get("RR") or 0)
+        rl = int(values.get("RL") or 0)
+
+        payload = {
+            "ok": True,
+            "stamp": _rb2_ticks_time.time(),
+            "data": [fl, fr, rr, rl],
+        }
+
+        tmp_path = _RB2_WHEEL_TICKS_JSON_FILE + ".tmp"
+
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            _rb2_ticks_json.dump(payload, f)
+
+        _rb2_ticks_os.replace(tmp_path, _RB2_WHEEL_TICKS_JSON_FILE)
+        return True
+
+    except Exception as e:
+        try:
+            with open("/tmp/rb2_wheel_ticks_json_error.log", "a", encoding="utf-8") as f:
+                f.write(f"{_rb2_ticks_time.time():.3f} {e}\n")
+        except Exception:
+            pass
+        return False
+
+# === RB2 WHEEL TICKS JSON BRIDGE - END ===
+
+# === RB2 WHEEL TICKS JSON HEARTBEAT - BEGIN ===
+# Maintient /tmp/rb2_wheel_ticks.json frais entre deux lectures encodeurs.
+# Ne parle pas à l'ESP32. Il réécrit seulement la dernière valeur connue avec un stamp récent.
+# Objectif : éviter les coupures /wheel_ticks et /odom quand les roues sont immobiles.
+
+import threading as _rb2_ticks_threading
+
+_rb2_ticks_last_values = None
+_rb2_ticks_last_lock = _rb2_ticks_threading.Lock()
+_rb2_ticks_heartbeat_started = False
+
+_rb2_write_wheel_ticks_json_original = rb2_write_wheel_ticks_json
+
+def rb2_write_wheel_ticks_json(values):
+    global _rb2_ticks_last_values
+
+    ok = _rb2_write_wheel_ticks_json_original(values)
+
+    if ok and values:
+        try:
+            fl = int(values.get("FL") or 0)
+            fr = int(values.get("FR") or 0)
+            rr = int(values.get("RR") or 0)
+            rl = int(values.get("RL") or 0)
+
+            with _rb2_ticks_last_lock:
+                _rb2_ticks_last_values = {
+                    "FL": fl,
+                    "FR": fr,
+                    "RR": rr,
+                    "RL": rl,
+                }
+        except Exception:
+            pass
+
+    return ok
+
+def _rb2_wheel_ticks_heartbeat_loop():
+    while True:
+        try:
+            with _rb2_ticks_last_lock:
+                values = dict(_rb2_ticks_last_values) if _rb2_ticks_last_values else None
+
+            if values:
+                _rb2_write_wheel_ticks_json_original(values)
+
+        except Exception as e:
+            try:
+                with open("/tmp/rb2_wheel_ticks_heartbeat_error.log", "a", encoding="utf-8") as f:
+                    f.write(f"{_rb2_ticks_time.time():.3f} {e}\n")
+            except Exception:
+                pass
+
+        _rb2_ticks_time.sleep(0.25)
+
+def _rb2_start_wheel_ticks_heartbeat():
+    global _rb2_ticks_heartbeat_started
+
+    if _rb2_ticks_heartbeat_started:
+        return
+
+    _rb2_ticks_heartbeat_started = True
+
+    t = _rb2_ticks_threading.Thread(
+        target=_rb2_wheel_ticks_heartbeat_loop,
+        name="rb2-wheel-ticks-heartbeat",
+        daemon=True,
+    )
+    t.start()
+
+_rb2_start_wheel_ticks_heartbeat()
+
+# === RB2 WHEEL TICKS JSON HEARTBEAT - END ===
+
+
+
+
 
 def compute_odom_from_values(values):
     if not values:
@@ -2933,6 +3102,7 @@ def encoders():
         pass
 
     values = parse_encoders_from_lines(lines)
+    rb2_write_wheel_ticks_json(values)
 
     # Convention RB2 :
     # avance physique = positif
@@ -3731,9 +3901,9 @@ TRACE_RETURN_FORWARD_TURN_RIGHT = -20
 TRACE_RETURN_FORWARD_PHYSICAL_TURN_DEG = 180.0
 # Observation terrain : consigne odométrique 180° = environ 90° physique.
 # Donc, pour obtenir un vrai demi-tour physique, on vise 360° odométriques.
-TRACE_RETURN_FORWARD_TURN_TARGET_DEG = 360.0
+TRACE_RETURN_FORWARD_TURN_TARGET_DEG = 500.0
 TRACE_RETURN_FORWARD_TURN_TOL_DEG = 8.0
-TRACE_RETURN_FORWARD_TURN_TIMEOUT_S = 18.0
+TRACE_RETURN_FORWARD_TURN_TIMEOUT_S = 60.0
 
 
 def rb2_trace_return_forward_swap_drive(left, right):
@@ -3778,7 +3948,7 @@ def rb2_trace_return_forward_build_segments(rows):
             "recorded_duration_s": duration_s,
             "source_start_time_s": src.get("start_time_s"),
             "source_end_time_s": src.get("end_time_s"),
-            "mode": "v22b_retour_avant_180_calibre",
+            "mode": "v22d_retour_avant_180_calibre_500deg",
         })
 
     if not return_segments:
@@ -3812,7 +3982,7 @@ def rb2_trace_return_forward_rotate_180():
         target_odom_angle_deg=TRACE_RETURN_FORWARD_TURN_TARGET_DEG,
         actual_angle_deg=0.0,
         send_count=0,
-        mode="v22b_retour_avant_180_calibre",
+        mode="v22d_retour_avant_180_calibre_500deg",
     )
 
     start_mono = time.monotonic()
@@ -3880,7 +4050,7 @@ def rb2_trace_return_forward_worker(path):
             speed_limit=TRACE_FOLLOW_MAX_SPEED,
             front_min_cm=TRACE_FOLLOW_FRONT_MIN_CM,
             back_min_cm=TRACE_FOLLOW_BACK_MIN_CM,
-            mode="v22b_retour_avant_180_calibre",
+            mode="v22d_retour_avant_180_calibre_500deg",
             total_recorded_s=round(total_recorded_s, 3),
         )
 
@@ -3898,7 +4068,7 @@ def rb2_trace_return_forward_worker(path):
                     running=False, ok=True, state="stopped",
                     message="Retour avant arrêté par l'opérateur", cmd="d0,0",
                     finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    mode="v22b_retour_avant_180_calibre",
+                    mode="v22d_retour_avant_180_calibre_500deg",
                 )
                 return
 
@@ -3914,7 +4084,7 @@ def rb2_trace_return_forward_worker(path):
                     message="Retour avant bloqué par sécurité LIDAR", last_error=reason,
                     step=idx + 1, cmd="d0,0", raw_cmd=seg.get("raw_cmd", ""),
                     finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    mode="v22b_retour_avant_180_calibre",
+                    mode="v22d_retour_avant_180_calibre_500deg",
                 )
                 return
 
@@ -3928,7 +4098,7 @@ def rb2_trace_return_forward_worker(path):
                 source_end_time_s=seg.get("source_end_time_s"),
                 turn_180_actual_deg=round(actual_turn, 2),
                 send_count=send_count,
-                mode="v22b_retour_avant_180_calibre",
+                mode="v22d_retour_avant_180_calibre_500deg",
             )
 
             seg_start = time.monotonic()
@@ -3941,7 +4111,7 @@ def rb2_trace_return_forward_worker(path):
                         running=False, ok=True, state="stopped",
                         message="Retour avant arrêté par l'opérateur", cmd="d0,0",
                         finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                        mode="v22b_retour_avant_180_calibre",
+                        mode="v22d_retour_avant_180_calibre_500deg",
                     )
                     return
 
@@ -3952,7 +4122,7 @@ def rb2_trace_return_forward_worker(path):
                         running=False, ok=False, state="blocked",
                         message="Retour avant bloqué pendant mouvement", last_error=reason,
                         cmd="d0,0", finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                        mode="v22b_retour_avant_180_calibre",
+                        mode="v22d_retour_avant_180_calibre_500deg",
                     )
                     return
 
@@ -3972,20 +4142,20 @@ def rb2_trace_return_forward_worker(path):
             running=False, ok=True, state="finished", message="Retour avant terminé",
             cmd="d0,0", step=len(segments), total=len(segments),
             finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-            mode="v22b_retour_avant_180_calibre",
+            mode="v22d_retour_avant_180_calibre_500deg",
         )
 
     except InterruptedError as e:
         rb2_trace_follow_set_status(
             running=False, ok=True, state="stopped", message=str(e),
             last_error="", cmd="d0,0", finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-            mode="v22b_retour_avant_180_calibre",
+            mode="v22d_retour_avant_180_calibre_500deg",
         )
     except Exception as e:
         rb2_trace_follow_set_status(
             running=False, ok=False, state="error", message="Erreur RETOUR AVANT",
             last_error=str(e), cmd="d0,0", finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-            mode="v22b_retour_avant_180_calibre",
+            mode="v22d_retour_avant_180_calibre_500deg",
         )
     finally:
         rb2_trace_follow_send_stop_burst()
@@ -4014,7 +4184,7 @@ def trace_return_forward_preview():
             "ok": True,
             "file": os.path.basename(path),
             "path": path,
-            "mode": "v22b_retour_avant_180_calibre",
+            "mode": "v22d_retour_avant_180_calibre_500deg",
             "rows": len(rows),
             "segments": len(segments),
             "turn_first_deg": TRACE_RETURN_FORWARD_PHYSICAL_TURN_DEG,
@@ -4045,7 +4215,7 @@ def trace_return_forward_start():
             running=False, ok=False, state="error",
             message="Aucun fichier *_drive.csv trouvé pour RETOUR AVANT",
             file=None, last_error="Aucun fichier *_drive.csv dans /opt/rb2/traces", cmd="d0,0",
-            mode="v22b_retour_avant_180_calibre",
+            mode="v22d_retour_avant_180_calibre_500deg",
         )
         rb2_trace_follow_send_stop_burst()
         return jsonify({"ok": False, "error": "Aucun fichier *_drive.csv trouvé"}), 404
@@ -4059,7 +4229,7 @@ def trace_return_forward_start():
         rb2_trace_follow_set_status(
             running=False, ok=False, state="error", message="Fichier trace invalide pour retour avant",
             file=os.path.basename(path), last_error=str(e), cmd="d0,0",
-            mode="v22b_retour_avant_180_calibre",
+            mode="v22d_retour_avant_180_calibre_500deg",
         )
         rb2_trace_follow_send_stop_burst()
         return jsonify({
@@ -4072,7 +4242,7 @@ def trace_return_forward_start():
     rb2_trace_follow_set_status(
         running=True, ok=True, state="starting", message="Démarrage RETOUR AVANT",
         file=os.path.basename(path), step=0, total=len(segments), cmd="d0,0",
-        last_error="", mode="v22b_retour_avant_180_calibre",
+        last_error="", mode="v22d_retour_avant_180_calibre_500deg",
     )
 
     TRACE_FOLLOW_THREAD = threading.Thread(
@@ -4087,7 +4257,7 @@ def trace_return_forward_start():
         "message": "RETOUR AVANT démarré: 180 degrés physique calibré puis trace inverse en avançant",
         "file": os.path.basename(path),
         "total_segments": len(segments),
-        "mode": "v22b_retour_avant_180_calibre",
+        "mode": "v22d_retour_avant_180_calibre_500deg",
         "turn_first_deg": TRACE_RETURN_FORWARD_PHYSICAL_TURN_DEG,
             "turn_odom_target_deg": TRACE_RETURN_FORWARD_TURN_TARGET_DEG,
         "limits": {
@@ -4755,7 +4925,7 @@ TERRAIN_HTML = """
         <span class="rb2-camera-info-muted">Créé par Roméo St-Cyr en  juin 2026</span>
         <span class="rb2-camera-info-sep">--</span>
         <span class="rb2-camera-info-state" id="rb2CameraInfoState">État RB2 : vérification...</span>
-        <span style="float:right;display:inline-flex;gap:5px;margin-left:10px;align-items:center;">
+        <span style="float:right;display:inline-flex;gap:4px;margin-left:4px;align-items:center;position:relative;right:8px;z-index:999999;pointer-events:auto;">
           <button id="rb2StatusShutdownBtn"
                   onclick="rb2ShutdownAllDirect()"
                   style="padding:3px 9px;height:23px;min-width:74px;border-radius:7px;border:1px solid #ff4040;background:#b00000;color:#fff;font-size:10px;font-weight:900;cursor:pointer;">
@@ -4769,14 +4939,20 @@ TERRAIN_HTML = """
                   style="padding:3px 8px;height:23px;min-width:58px;border-radius:7px;border:1px solid #065f46;background:#047857;color:#fff;font-size:10px;font-weight:900;cursor:pointer;">
             CAMÉRA
           </button>
+          <button id="rb2RetourWifiBtn"
+                  type="button"
+                  onclick="rb2RetourWifiAckFinal(); return false;"
+                  title="Retour WiFi automatique : bleu = prêt, rouge = retour effectué/en cours"
+                  style="position:relative;z-index:999999;pointer-events:auto;padding:3px 8px;height:23px;min-width:72px;border-radius:7px;border:1px solid #38bdf8;background:#0f2a3a;color:#bdefff;font-size:10px;font-weight:900;cursor:pointer;">
+            Retour WiFi
+          </button>
+          
         </span>
       </div>
       <div class="terrain-view-toggle-row" style="display:none;">
         <button id="terrainViewToggleBtn" class="terrain-view-toggle-btn" onclick="toggleTerrainView()">AFFICHAGE : SPLIT</button>
       </div>
-
-
-      <img id="cam" src="" alt="Caméra RB2">
+<img id="cam" src="" alt="Caméra RB2">
       <div id="terrainLidarWrap" class="terrain-lidar-wrap">
         <canvas id="terrainLidarCanvas"></canvas>
         <div class="terrain-lidar-zoom-row">
@@ -5063,7 +5239,7 @@ TERRAIN_HTML = """
 
         <button onclick="panLeft()">◀</button>
         <div class="readout">
-          Pan : <span id="panValue">90</span>°<br>
+          Pan : <span id="panValue">95</span>°<br>
           Tilt : <span id="tiltValue">90</span>°
         </div>
         <button onclick="panRight()">▶</button>
@@ -5074,7 +5250,7 @@ TERRAIN_HTML = """
       </div>
 
       <div class="small-row">
-        <button onclick="setPanTilt(90,90)">Centre</button>
+        <button onclick="setPanTilt(95, 90)">Centre</button>
         <button onclick="setTiltOnly(145)">T 145</button>
         <button class="stop" onclick="setTiltOnly(68)">T 68</button>
       </div>
@@ -5127,7 +5303,7 @@ TERRAIN_HTML = """
   </div>
 
 <script>
-let pan = 90;
+let pan = 95;
 let tilt = 90;
 let driving = false;
 let currentDriveCmd = "d0,0";
@@ -6489,6 +6665,252 @@ setTimeout(rb2AddShutdownAllTerrainButton, 1500);
 })();
 </script>
 
+
+<!-- RB2 : bouton Restart Camera dans la barre du haut -->
+<style>
+  .rb2-restart-camera-top-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 6px 11px;
+    margin-left: 8px;
+    border: 1px solid #ffb347;
+    border-radius: 9px;
+    background: #3a2a10;
+    color: #ffd28a;
+    font-weight: 800;
+    font-size: 13px;
+    line-height: 1;
+    text-decoration: none;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .rb2-restart-camera-top-btn:hover {
+    filter: brightness(1.15);
+  }
+
+  .rb2-restart-camera-top-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
+    filter: none;
+  }
+</style>
+
+<script>
+(function() {
+  if (window.__rb2RestartCameraTopButtonInstalled) return;
+  window.__rb2RestartCameraTopButtonInstalled = true;
+
+  function textOf(el) {
+    return (el && el.textContent ? el.textContent : "").trim().toUpperCase();
+  }
+
+  function findTopBarParent() {
+    const candidates = Array.from(document.querySelectorAll("a, button"));
+    let cameraEl = null;
+    let lidarEl = null;
+    let arretEl = null;
+
+    for (const el of candidates) {
+      const t = textOf(el);
+      if (!cameraEl && (t === "CAMÉRA" || t === "CAMERA" || t.includes("CAMÉRA") || t.includes("CAMERA"))) {
+        cameraEl = el;
+      }
+      if (!lidarEl && t.includes("LIDAR")) {
+        lidarEl = el;
+      }
+      if (!arretEl && (t.includes("ARRÊT RB2") || t.includes("ARRET RB2") || t.includes("ARRÊTER RB2"))) {
+        arretEl = el;
+      }
+    }
+
+    if (cameraEl && lidarEl && cameraEl.parentElement === lidarEl.parentElement) {
+      return { parent: cameraEl.parentElement, after: cameraEl };
+    }
+
+    if (cameraEl) {
+      return { parent: cameraEl.parentElement, after: cameraEl };
+    }
+
+    if (lidarEl) {
+      return { parent: lidarEl.parentElement, after: lidarEl };
+    }
+
+    if (arretEl) {
+      return { parent: arretEl.parentElement, after: arretEl };
+    }
+
+    return null;
+  }
+
+  function installButton() {
+    if (document.getElementById("rb2-restart-camera-top-btn")) return;
+
+    const found = findTopBarParent();
+    if (!found || !found.parent) {
+      console.log("RB2 Restart Camera: barre du haut non trouvée.");
+      return;
+    }
+
+    const btn = document.createElement("button");
+    btn.id = "rb2-restart-camera-top-btn";
+    btn.className = "rb2-restart-camera-top-btn";
+    btn.type = "button";
+    btn.title = "Redémarrer seulement la caméra du Raspberry Pi Zero 2 W";
+    btn.textContent = "Restart Camera";
+
+    found.after.insertAdjacentElement("afterend", btn);
+
+    btn.addEventListener("click", async function() {
+      const ok = confirm("Redémarrer seulement la caméra du Zero 2 W ?");
+      if (!ok) return;
+
+      const oldText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Restart...";
+
+      try {
+        const r = await fetch("/zero_cam_restart", { method: "POST" });
+        const data = await r.json();
+
+        if (data && data.ok) {
+          btn.textContent = "Camera OK";
+          setTimeout(function() {
+            btn.textContent = oldText;
+            btn.disabled = false;
+          }, 3000);
+        } else {
+          btn.textContent = "Erreur";
+          console.log("RB2 zero_cam_restart erreur:", data);
+          alert("La commande a été envoyée, mais une erreur est retournée. Voir /tmp/rb2_zero_cam_restart.log");
+          setTimeout(function() {
+            btn.textContent = oldText;
+            btn.disabled = false;
+          }, 3000);
+        }
+      } catch (e) {
+        btn.textContent = "Erreur";
+        console.log("RB2 zero_cam_restart exception:", e);
+        alert("Erreur de communication avec /zero_cam_restart");
+        setTimeout(function() {
+          btn.textContent = oldText;
+          btn.disabled = false;
+        }, 3000);
+      }
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", installButton);
+  } else {
+    installButton();
+  }
+})();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- RB2 : Retour WiFi phase 2A UI -->
+<script>
+window.rb2RetourWifiEventActive = false;
+
+window.rb2RetourWifiPaintPhase2A = function(data) {
+  const btn = document.getElementById("rb2RetourWifiBtn");
+  if (!btn) return;
+
+  const red = !!(data && (data.active || data.done));
+  window.rb2RetourWifiEventActive = red;
+
+  if (red) {
+    btn.textContent = "RETOUR";
+    btn.style.borderColor = "#ff4d4d";
+    btn.style.background = "#b00000";
+    btn.style.color = "#ffffff";
+  } else {
+    btn.textContent = "Retour WiFi";
+    btn.style.borderColor = "#38bdf8";
+    btn.style.background = "#0f2a3a";
+    btn.style.color = "#bdefff";
+  }
+};
+
+window.rb2RetourWifiAckFinal = async function() {
+  if (!window.rb2RetourWifiEventActive) return;
+
+  try {
+    const r = await fetch("/wifi_return_ack", {
+      method: "POST",
+      cache: "no-store"
+    });
+
+    const data = await r.json();
+
+    if (data && data.ok) {
+      window.rb2RetourWifiPaintPhase2A(data);
+    }
+  } catch (e) {
+    alert("Erreur ACK Retour WiFi.");
+  }
+};
+
+window.rb2RetourWifiHeartbeatPhase2A = async function() {
+  try {
+    await fetch("/operator_heartbeat", {
+      method: "POST",
+      cache: "no-store"
+    });
+  } catch (e) {}
+};
+
+window.rb2RetourWifiPollPhase2A = async function() {
+  try {
+    const r = await fetch("/wifi_return_status", {cache: "no-store"});
+    const data = await r.json();
+
+    if (data && data.ok) {
+      window.rb2RetourWifiPaintPhase2A(data);
+    }
+  } catch (e) {}
+};
+
+window.rb2RetourWifiStartPhase2A = function() {
+  if (window.__rb2RetourWifiPhase2AStarted) return;
+  window.__rb2RetourWifiPhase2AStarted = true;
+
+  window.rb2RetourWifiHeartbeatPhase2A();
+  window.rb2RetourWifiPollPhase2A();
+
+  setInterval(window.rb2RetourWifiHeartbeatPhase2A, 1000);
+  setInterval(window.rb2RetourWifiPollPhase2A, 1500);
+};
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", window.rb2RetourWifiStartPhase2A);
+} else {
+  window.rb2RetourWifiStartPhase2A();
+}
+</script>
+
 </body>
 </html>
 """
@@ -7385,7 +7807,7 @@ let lastClearance = null;
 // Avant : brut 36 cm = environ 3 cm libre => nez RB2 à 33 cm du centre LIDAR.
 // Arrière ajusté terrain : à 1 cm affiché il y a déjà collision => arrière RB2 à 9 cm du centre LIDAR.
 const RB2_FRONT_COLLISION_CM = 33.0;
-const RB2_BACK_COLLISION_CM = 9.0;
+const RB2_BACK_COLLISION_CM = 10.0;
 const RB2_MARGIN_DANGER_CM = 5.0;
 const RB2_MARGIN_WARN_CM = 15.0;
 
@@ -7576,11 +7998,72 @@ function updateDistancePanel(clearance) {
   setText("usefulNearest", candidates.length ? candidates[0][0] + " " + fmtSignedCm(candidates[0][1]) : "---");
 }
 
+
+function rb2ApplyMapBorderFromClearance(clearance) {
+  const panels = document.querySelectorAll(".map-panel, .camera");
+  if (!panels || panels.length === 0) return;
+
+  const front = Number(clearance && clearance.front_cm);
+  const back = Number(clearance && clearance.back_cm);
+
+  const frontDanger = Number.isFinite(front) && front > 0 && front <= 37.0;
+  const frontWarn   = Number.isFinite(front) && front > 0 && front <= 47.0;
+
+  // Arrière RB2 :
+  // 0-12 cm = antennes / structure RB2 ignorées
+  // 12-15 cm = danger
+  // 15-25 cm = avertissement
+  const backDanger = Number.isFinite(back) && back > 12.0 && back <= 15.0;
+  const backWarn   = Number.isFinite(back) && back > 12.0 && back <= 25.0;
+
+  let level = "ok";
+  if (frontDanger || backDanger) {
+    level = "danger";
+  } else if (frontWarn || backWarn) {
+    level = "warn";
+  }
+
+  panels.forEach(function(panel) {
+    panel.classList.remove("rb2-lidar-warn", "rb2-lidar-danger");
+    if (level === "danger") panel.classList.add("rb2-lidar-danger");
+    if (level === "warn") panel.classList.add("rb2-lidar-warn");
+  });
+}
+
 async function updateLidarMap() {
   try {
     const res = await fetch("/lidar_map", {cache: "no-store"});
     const j = await res.json();
     if (!j.ok) throw new Error(j.error || "lidar_map non OK");
+
+    // RB2_LIDAR_SUMMARY_MERGE_START
+    // /lidar_map donne les points de la carte.
+    // /lidar donne les distances utiles corrigées, incluant l'arrière filtré.
+    try {
+      const sr = await fetch("/lidar", {cache: "no-store"});
+      const sj = await sr.json();
+
+      if (sj && sj.ok !== false) {
+        j.clearance = j.clearance || {};
+
+        for (const k of ["front_cm", "back_cm", "left_cm", "right_cm", "min_cm"]) {
+          const v = Number(sj[k]);
+          if (Number.isFinite(v)) {
+            j[k] = v;
+            j.clearance[k] = v;
+          }
+        }
+
+        if (sj.rb2_filter) {
+          j.rb2_filter = sj.rb2_filter;
+        }
+      }
+    } catch (e) {
+      console.warn("RB2: impossible de fusionner /lidar avec /lidar_map", e);
+    }
+
+    rb2ApplyMapBorderFromClearance(j.clearance || j);
+    // RB2_LIDAR_SUMMARY_MERGE_END
 
     let clearance = null;
     try {
@@ -7859,14 +8342,16 @@ window.addEventListener("resize", function () { if (lastLidarData) drawLidarMap(
 
 
 
-<!-- RB2_LIDAR_COLLISION_BORDER_FIX_V1 -->
+<!-- RB2_LIDAR_COLLISION_BORDER_FIX_V2 -->
 <style>
-  .map-panel.rb2-lidar-warn {
+  .map-panel.rb2-lidar-warn,
+  .camera.rb2-lidar-warn {
     border: 5px solid #ffd400 !important;
     box-shadow: 0 0 18px #ffd400 !important;
   }
 
-  .map-panel.rb2-lidar-danger {
+  .map-panel.rb2-lidar-danger,
+  .camera.rb2-lidar-danger {
     border: 6px solid #ff3030 !important;
     box-shadow: 0 0 22px #ff3030 !important;
   }
@@ -7874,51 +8359,59 @@ window.addEventListener("resize", function () { if (lastLidarData) drawLidarMap(
 
 <script>
 (function() {
-  const FRONT_DANGER_CM = 37;
-  const FRONT_WARNING_CM = 47;
-  const BACK_DANGER_CM = 17;
-  const BACK_WARNING_CM = 27;
+  /*
+    RB2 - contour LIDAR corrigé V2
+
+    But :
+      - ne jamais utiliser min_cm pour le contour;
+      - utiliser seulement front_cm et back_cm;
+      - imposer l'état réel régulièrement pour éviter un contour orange collé.
+
+    Géométrie pratique RB2 depuis le centre LIDAR :
+      Avant  : 37 cm
+      Arrière: 17 cm
+
+    Marge d'avertissement voulue :
+      4 cm réels
+
+    Seuils LIDAR résultants :
+      Avant orange  : 41 cm
+      Arrière orange: 21 cm
+  */
+
+  const FRONT_BODY_CM = 37.0;
+  const BACK_BODY_CM = 17.0;
+  const WARNING_MARGIN_CM = 4.0;
+
+
+  const BACK_SELF_IGNORE_CM = 10;   // 0-10 cm = RB2 lui-même : antenne/châssis arrière
+  const BACK_DANGER_CM = 15;        // danger réel arrière à partir de 15 cm du centre LIDAR
+  const BACK_WARNING_CM = 25;       // avertissement arrière avant danger
+
+  const BACK_SELF_IGNORE_CM = 10;   // 0-10 cm = RB2 lui-même : antennes/châssis arrière
+  const BACK_DANGER_CM = 15;        // danger réel arrière depuis le centre LIDAR
+  const BACK_WARNING_CM = 25;       // avertissement arrière depuis le centre LIDAR
+
+  function rb2Num(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
 
   function rb2GetNumber(obj, names) {
     if (!obj) return null;
 
     for (const name of names) {
       if (obj[name] !== undefined && obj[name] !== null) {
-        const n = Number(obj[name]);
-        if (Number.isFinite(n)) return n;
+        const n = rb2Num(obj[name]);
+        if (n !== null) return n;
       }
     }
 
     return null;
   }
 
-  function rb2Text(id) {
-    const el = document.getElementById(id);
-    if (!el) return "";
-    return (el.textContent || "").toLowerCase();
-  }
-
-  function rb2ClassifyFromText() {
-    const t = [
-      rb2Text("frontState"),
-      rb2Text("backState"),
-      rb2Text("usefulNearest"),
-      rb2Text("rb2LidarState")
-    ].join(" ");
-
-    if (t.includes("danger") || t.includes("collision") || t.includes("rouge") || t.includes("critique")) {
-      return "danger";
-    }
-
-    if (t.includes("avert") || t.includes("warning") || t.includes("warn") || t.includes("jaune") || t.includes("proche")) {
-      return "warn";
-    }
-
-    return "ok";
-  }
-
-  function rb2ClassifyFromClearance(clearance) {
-    const front = rb2GetNumber(clearance, [
+  function rb2ClassifyFromLidarData(data) {
+    const front = rb2GetNumber(data, [
       "front_cm",
       "front",
       "front_min_cm",
@@ -7928,7 +8421,7 @@ window.addEventListener("resize", function () { if (lastLidarData) drawLidarMap(
       "avant"
     ]);
 
-    const back = rb2GetNumber(clearance, [
+    const back = rb2GetNumber(data, [
       "back_cm",
       "back",
       "rear_cm",
@@ -7943,29 +8436,55 @@ window.addEventListener("resize", function () { if (lastLidarData) drawLidarMap(
       "arrière"
     ]);
 
-    if ((front !== null && front <= FRONT_DANGER_CM) ||
-        (back !== null && back <= BACK_DANGER_CM)) {
+    /*
+      Important :
+      min_cm est volontairement ignoré.
+      Il peut venir d'un côté, d'une antenne, d'une roue ou d'un élément non critique.
+    */
+
+    if ((front !== null && front > 0 && front <= FRONT_DANGER_CM) ||
+
+        (back !== null && back > BACK_SELF_IGNORE_CM && back <= BACK_DANGER_CM)
       return "danger";
     }
 
-    if ((front !== null && front <= FRONT_WARNING_CM) ||
-        (back !== null && back <= BACK_WARNING_CM)) {
+    if ((front !== null && front > 0 && front <= FRONT_WARNING_CM) ||
+        (back !== null && back > BACK_SELF_IGNORE_CM && back <= BACK_WARNING_CM)
+
       return "warn";
     }
 
-    return rb2ClassifyFromText();
+    return "ok";
   }
 
   function rb2ApplyLidarBorder(level) {
-    const panel = document.querySelector(".map-panel");
-    if (!panel) return;
+    const panels = document.querySelectorAll(".map-panel, .camera");
 
-    panel.classList.remove("rb2-lidar-warn", "rb2-lidar-danger");
+    panels.forEach(function(panel) {
+      panel.classList.remove("rb2-lidar-warn", "rb2-lidar-danger");
 
-    if (level === "danger") {
-      panel.classList.add("rb2-lidar-danger");
-    } else if (level === "warn") {
-      panel.classList.add("rb2-lidar-warn");
+      if (level === "danger") {
+        panel.classList.add("rb2-lidar-danger");
+      } else if (level === "warn") {
+        panel.classList.add("rb2-lidar-warn");
+      }
+    });
+  }
+
+  async function rb2RefreshLidarBorderFromServer() {
+    try {
+      const res = await fetch("/lidar", {cache: "no-store"});
+      const j = await res.json();
+      const data = j.data || j;
+
+      if (!j.ok && j.ok !== undefined) {
+        rb2ApplyLidarBorder("ok");
+        return;
+      }
+
+      rb2ApplyLidarBorder(rb2ClassifyFromLidarData(data));
+    } catch (e) {
+      rb2ApplyLidarBorder("ok");
     }
   }
 
@@ -7976,22 +8495,22 @@ window.addEventListener("resize", function () { if (lastLidarData) drawLidarMap(
       const result = oldUpdateDistancePanel.apply(this, arguments);
 
       try {
-        rb2ApplyLidarBorder(rb2ClassifyFromClearance(clearance));
+        rb2ApplyLidarBorder(rb2ClassifyFromLidarData(clearance));
       } catch (e) {
-        console.log("RB2 lidar border fix:", e);
+        console.log("RB2 lidar border classification error:", e);
       }
 
       return result;
     };
   }
 
-  setInterval(function() {
-    rb2ApplyLidarBorder(rb2ClassifyFromText());
-  }, 300);
+  window.rb2RefreshLidarBorderFromServer = rb2RefreshLidarBorderFromServer;
 
-  window.rb2LidarBorderTest = function(level) {
-    rb2ApplyLidarBorder(level);
-  };
+  document.addEventListener("DOMContentLoaded", rb2RefreshLidarBorderFromServer);
+  window.addEventListener("load", rb2RefreshLidarBorderFromServer);
+
+  setTimeout(rb2RefreshLidarBorderFromServer, 300);
+  setInterval(rb2RefreshLidarBorderFromServer, 500);
 })();
 </script>
 
@@ -9328,143 +9847,534 @@ def slam_status():
     })
 
 
+
+
+
+# ============================================================
+# RB2 - Retour WiFi automatique
+# Phase 2A : sécurité locale autonome sur perte heartbeat.
+#
+# Armé par défaut.
+# Bleu Retour WiFi = prêt.
+# Rouge RETOUR = retour en cours ou retour déjà effectué.
+# ============================================================
+
+import threading as rb2_wifi_return_threading
+
+RB2_OPERATOR_LAST_HEARTBEAT = 0.0
+RB2_OPERATOR_CLIENT_IP = ""
+RB2_OPERATOR_CLIENT_LAST_SEEN = 0.0
+
+RB2_WIFI_RETURN_READY = True
+RB2_WIFI_RETURN_ACTIVE = False
+RB2_WIFI_RETURN_DONE = False
+RB2_WIFI_RETURN_LOST = False
+RB2_WIFI_RETURN_WATCHDOG_STARTED = False
+RB2_WIFI_RETURN_LAST_EVENT = "prêt"
+RB2_WIFI_RETURN_LAST_REASON = ""
+RB2_WIFI_RETURN_LAST_PULSE = 0
+RB2_WIFI_RETURN_LAST_START = 0.0
+RB2_WIFI_RETURN_LAST_END = 0.0
+
+RB2_WIFI_RETURN_LOSS_AFTER_S = 999999.0    # désactivé : remplacé par rb2-wifi-dual-loss-return
+RB2_WIFI_RETURN_PULSE_S = 2.0
+RB2_WIFI_RETURN_MAX_PULSES = 5
+RB2_WIFI_RETURN_RECENT_DRIVE_WINDOW_S = 900.0    # 15 minutes : autorise le retour après conduite récente prolongée
+RB2_WIFI_RETURN_LAST_DRIVE_TIME = 0.0
+RB2_WIFI_RETURN_LAST_DRIVE_COMMAND = ""
+RB2_WIFI_RETURN_LAST_DRIVE_LEFT = 0
+RB2_WIFI_RETURN_LAST_DRIVE_RIGHT = 0
+RB2_WIFI_RETURN_CMD = "d-20,-20"
+RB2_WIFI_RETURN_SPEED_LEFT = -20
+RB2_WIFI_RETURN_SPEED_RIGHT = -20
+
+RB2_WIFI_RETURN_LOCK = rb2_wifi_return_threading.RLock()
+
+
+def rb2_wifi_return_log(msg):
+    import time
+    try:
+        with open("/tmp/rb2_wifi_return.log", "a", encoding="utf-8") as f:
+            f.write(time.strftime("%F %T") + " " + str(msg) + "\\n")
+    except Exception:
+        pass
+
+
+def rb2_wifi_return_heartbeat_age():
+    import time
+    if not RB2_OPERATOR_LAST_HEARTBEAT:
+        return None
+    return time.time() - float(RB2_OPERATOR_LAST_HEARTBEAT)
+
+
+def rb2_wifi_return_signal_present(max_age_s=1.5):
+    age = rb2_wifi_return_heartbeat_age()
+    return age is not None and age <= max_age_s
+
+
+def rb2_wifi_return_recent_drive_activity():
+    """
+    Empêche un retour automatique lorsque /terrain est simplement fermé
+    ou en arrière-plan alors que RB2 ne roulait pas.
+
+    Le retour automatique n'est permis que si une commande moteur non-stop
+    a été acceptée récemment.
+    """
+    import time
+
+    try:
+        last = float(RB2_WIFI_RETURN_LAST_DRIVE_TIME or 0.0)
+    except Exception:
+        last = 0.0
+
+    if last <= 0.0:
+        return False, "aucune commande moteur récente"
+
+    age = time.time() - last
+
+    if age <= RB2_WIFI_RETURN_RECENT_DRIVE_WINDOW_S:
+        return True, (
+            "commande moteur récente "
+            + str(round(age, 2))
+            + " s ; "
+            + str(RB2_WIFI_RETURN_LAST_DRIVE_COMMAND)
+        )
+
+    return False, (
+        "dernière commande moteur trop ancienne "
+        + str(round(age, 2))
+        + " s > "
+        + str(RB2_WIFI_RETURN_RECENT_DRIVE_WINDOW_S)
+        + " s"
+    )
+
+
+def rb2_wifi_return_client_reachable():
+    """
+    Vérifie si le client opérateur répond réellement.
+
+    Important :
+    - Un client encore "associé AP" n'est PAS une preuve suffisante.
+    - L'association peut rester visible quelques secondes même si le lien utile
+      est perdu ou gelé.
+    - Pour éviter de bloquer le Retour WiFi, on se fie seulement à un ping OK.
+    """
+    import subprocess
+
+    ip = str(RB2_OPERATOR_CLIENT_IP or "").strip()
+
+    if not ip:
+        return False, "aucun client opérateur connu"
+
+    if ip.startswith("127."):
+        return True, "client local"
+
+    try:
+        p = subprocess.run(
+            ["ping", "-c", "1", "-W", "1", ip],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+
+        if p.returncode == 0:
+            return True, "client opérateur ping OK " + ip
+
+        return False, "client opérateur sans réponse ping " + ip
+
+    except Exception as e:
+        return False, "erreur ping client opérateur " + ip + " : " + str(e)
+
+def rb2_wifi_return_stop(reason="STOP retour WiFi"):
+    try:
+        rb2_trace_follow_send_stop_burst()
+        rb2_wifi_return_log(reason + " : d0,0 burst")
+    except Exception as e:
+        rb2_wifi_return_log("ERREUR stop retour WiFi: " + str(e))
+        try:
+            esp32.send("d0,0", wait=0.0)
+        except Exception:
+            pass
+
+
+def rb2_wifi_return_back_allowed():
+    try:
+        allowed, reason = rb2_trace_follow_lidar_allows(
+            RB2_WIFI_RETURN_SPEED_LEFT,
+            RB2_WIFI_RETURN_SPEED_RIGHT,
+        )
+        return bool(allowed), str(reason)
+    except Exception as e:
+        return False, "erreur sécurité LIDAR retour WiFi: " + str(e)
+
+
+def rb2_wifi_return_run():
+    import time
+
+    global RB2_WIFI_RETURN_ACTIVE
+    global RB2_WIFI_RETURN_DONE
+    global RB2_WIFI_RETURN_LOST
+    global RB2_WIFI_RETURN_LAST_EVENT
+    global RB2_WIFI_RETURN_LAST_REASON
+    global RB2_WIFI_RETURN_LAST_PULSE
+    global RB2_WIFI_RETURN_LAST_START
+    global RB2_WIFI_RETURN_LAST_END
+
+    with RB2_WIFI_RETURN_LOCK:
+        if RB2_WIFI_RETURN_ACTIVE:
+            return
+        RB2_WIFI_RETURN_ACTIVE = True
+        RB2_WIFI_RETURN_DONE = True
+        RB2_WIFI_RETURN_LOST = True
+        RB2_WIFI_RETURN_LAST_PULSE = 0
+        RB2_WIFI_RETURN_LAST_START = time.time()
+        RB2_WIFI_RETURN_LAST_END = 0.0
+        RB2_WIFI_RETURN_LAST_EVENT = "RETOUR déclenché"
+        RB2_WIFI_RETURN_LAST_REASON = "heartbeat perdu"
+
+    rb2_wifi_return_log("=== RETOUR WiFi déclenché ===")
+    rb2_wifi_return_stop("STOP initial retour WiFi")
+    time.sleep(0.5)
+
+    for pulse in range(1, RB2_WIFI_RETURN_MAX_PULSES + 1):
+        with RB2_WIFI_RETURN_LOCK:
+            RB2_WIFI_RETURN_LAST_PULSE = pulse
+            RB2_WIFI_RETURN_LAST_EVENT = "RETOUR impulsion " + str(pulse)
+
+        if rb2_wifi_return_signal_present(max_age_s=1.5):
+            rb2_wifi_return_log("signal revenu avant impulsion " + str(pulse))
+            break
+
+        allowed, reason = rb2_wifi_return_back_allowed()
+        rb2_wifi_return_log("sécurité LIDAR arrière avant impulsion " + str(pulse) + " : " + reason)
+
+        if not allowed:
+            with RB2_WIFI_RETURN_LOCK:
+                RB2_WIFI_RETURN_LAST_EVENT = "RETOUR bloqué LIDAR"
+                RB2_WIFI_RETURN_LAST_REASON = reason
+            rb2_wifi_return_stop("STOP retour WiFi bloqué LIDAR")
+            break
+
+        rb2_wifi_return_log("impulsion recul " + str(pulse) + " : " + RB2_WIFI_RETURN_CMD)
+
+        t_end = time.time() + RB2_WIFI_RETURN_PULSE_S
+
+        while time.time() < t_end:
+            if rb2_wifi_return_signal_present(max_age_s=1.5):
+                rb2_wifi_return_log("signal revenu pendant impulsion " + str(pulse))
+                break
+
+            allowed, reason = rb2_wifi_return_back_allowed()
+            if not allowed:
+                rb2_wifi_return_log("recul interrompu par LIDAR : " + reason)
+                with RB2_WIFI_RETURN_LOCK:
+                    RB2_WIFI_RETURN_LAST_EVENT = "RETOUR interrompu LIDAR"
+                    RB2_WIFI_RETURN_LAST_REASON = reason
+                break
+
+            try:
+                esp32.send(RB2_WIFI_RETURN_CMD, wait=0.0)
+            except Exception as e:
+                rb2_wifi_return_log("ERREUR commande recul retour WiFi: " + str(e))
+                with RB2_WIFI_RETURN_LOCK:
+                    RB2_WIFI_RETURN_LAST_EVENT = "ERREUR commande retour"
+                    RB2_WIFI_RETURN_LAST_REASON = str(e)
+                break
+
+            time.sleep(0.35)
+
+        rb2_wifi_return_stop("STOP fin impulsion retour WiFi " + str(pulse))
+        time.sleep(0.35)
+
+        if rb2_wifi_return_signal_present(max_age_s=1.5):
+            rb2_wifi_return_log("signal revenu après impulsion " + str(pulse))
+            with RB2_WIFI_RETURN_LOCK:
+                RB2_WIFI_RETURN_LAST_EVENT = "RETOUR terminé - signal revenu"
+                RB2_WIFI_RETURN_LAST_REASON = "signal revenu"
+            break
+
+    rb2_wifi_return_stop("STOP final retour WiFi")
+
+    with RB2_WIFI_RETURN_LOCK:
+        RB2_WIFI_RETURN_ACTIVE = False
+        RB2_WIFI_RETURN_LAST_END = time.time()
+        if RB2_WIFI_RETURN_LAST_EVENT.startswith("RETOUR impulsion"):
+            RB2_WIFI_RETURN_LAST_EVENT = "RETOUR terminé - limite atteinte"
+            RB2_WIFI_RETURN_LAST_REASON = "limite " + str(RB2_WIFI_RETURN_MAX_PULSES) + " impulsions"
+
+    rb2_wifi_return_log("=== fin RETOUR WiFi ===")
+
+
+def rb2_wifi_return_watchdog_loop():
+    import time
+
+    global RB2_WIFI_RETURN_LOST
+    global RB2_WIFI_RETURN_LAST_EVENT
+    global RB2_WIFI_RETURN_LAST_REASON
+
+    rb2_wifi_return_log("watchdog Retour WiFi phase 2A démarré")
+
+    while True:
+        try:
+            age = rb2_wifi_return_heartbeat_age()
+            trigger = False
+
+            with RB2_WIFI_RETURN_LOCK:
+                if (
+                    RB2_WIFI_RETURN_READY
+                    and not RB2_WIFI_RETURN_ACTIVE
+                    and RB2_OPERATOR_LAST_HEARTBEAT > 0
+                    and age is not None
+                    and age > RB2_WIFI_RETURN_LOSS_AFTER_S
+                ):
+                    trigger = True
+                    RB2_WIFI_RETURN_LOST = True
+                    RB2_WIFI_RETURN_LAST_EVENT = "SIGNAL PERDU"
+                    RB2_WIFI_RETURN_LAST_REASON = "heartbeat_age_s=" + str(round(age, 2))
+
+            if trigger:
+                recent_drive_ok, recent_drive_reason = rb2_wifi_return_recent_drive_activity()
+
+                if not recent_drive_ok:
+                    with RB2_WIFI_RETURN_LOCK:
+                        already = (
+                            RB2_WIFI_RETURN_LAST_EVENT
+                            == "heartbeat absent - sans conduite récente"
+                        )
+                        RB2_WIFI_RETURN_LOST = False
+                        RB2_WIFI_RETURN_LAST_EVENT = "heartbeat absent - sans conduite récente"
+                        RB2_WIFI_RETURN_LAST_REASON = recent_drive_reason
+
+                    if not already:
+                        rb2_wifi_return_log(
+                            "heartbeat absent mais pas de retour : "
+                            + recent_drive_reason
+                        )
+
+                else:
+                    client_ok, client_reason = rb2_wifi_return_client_reachable()
+
+                    if client_ok:
+                        with RB2_WIFI_RETURN_LOCK:
+                            RB2_WIFI_RETURN_LOST = False
+                            RB2_WIFI_RETURN_LAST_EVENT = "heartbeat ralenti - client WiFi OK"
+                            RB2_WIFI_RETURN_LAST_REASON = client_reason + " ; " + recent_drive_reason
+
+                        rb2_wifi_return_log(
+                            "heartbeat absent mais client encore joignable, pas de retour : "
+                            + client_reason
+                            + " ; "
+                            + recent_drive_reason
+                        )
+                    else:
+                        rb2_wifi_return_log(
+                            "SIGNAL PERDU age_s=" + str(round(age, 2))
+                            + " ; "
+                            + client_reason
+                            + " ; "
+                            + recent_drive_reason
+                        )
+                        rb2_wifi_return_run()
+
+        except Exception as e:
+            rb2_wifi_return_log("ERREUR watchdog Retour WiFi: " + str(e))
+
+        time.sleep(0.25)
+
+
+def rb2_wifi_return_ensure_watchdog():
+    global RB2_WIFI_RETURN_WATCHDOG_STARTED
+
+    if RB2_WIFI_RETURN_WATCHDOG_STARTED:
+        return
+
+    t = rb2_wifi_return_threading.Thread(
+        target=rb2_wifi_return_watchdog_loop,
+        name="rb2-wifi-return-watchdog",
+        daemon=True,
+    )
+    t.start()
+    RB2_WIFI_RETURN_WATCHDOG_STARTED = True
+
+
+@app.route("/operator_heartbeat", methods=["POST", "GET"])
+def operator_heartbeat():
+    import time
+
+    global RB2_OPERATOR_LAST_HEARTBEAT
+    global RB2_OPERATOR_CLIENT_IP
+    global RB2_OPERATOR_CLIENT_LAST_SEEN
+
+    rb2_wifi_return_ensure_watchdog()
+    RB2_OPERATOR_LAST_HEARTBEAT = time.time()
+    RB2_OPERATOR_CLIENT_LAST_SEEN = RB2_OPERATOR_LAST_HEARTBEAT
+
+    try:
+        RB2_OPERATOR_CLIENT_IP = str(request.headers.get("X-Forwarded-For", request.remote_addr) or "").split(",")[0].strip()
+    except Exception:
+        RB2_OPERATOR_CLIENT_IP = str(request.remote_addr or "")
+
+    if RB2_WIFI_RETURN_ACTIVE:
+        rb2_wifi_return_stop("STOP heartbeat revenu pendant retour WiFi")
+
+    return jsonify({
+        "ok": True,
+        "armed": True,
+        "ready": RB2_WIFI_RETURN_READY,
+        "active": RB2_WIFI_RETURN_ACTIVE,
+        "done": RB2_WIFI_RETURN_DONE,
+        "lost": RB2_WIFI_RETURN_LOST,
+        "last_event": RB2_WIFI_RETURN_LAST_EVENT,
+        "last_reason": RB2_WIFI_RETURN_LAST_REASON,
+    })
+
+
+@app.route("/wifi_return_status", methods=["GET"])
+def wifi_return_status():
+    rb2_wifi_return_ensure_watchdog()
+
+    age = rb2_wifi_return_heartbeat_age()
+
+    return jsonify({
+        "ok": True,
+        "armed": True,
+        "ready": RB2_WIFI_RETURN_READY,
+        "active": RB2_WIFI_RETURN_ACTIVE,
+        "done": RB2_WIFI_RETURN_DONE,
+        "lost": RB2_WIFI_RETURN_LOST,
+        "heartbeat_age_s": age,
+        "client_ip": RB2_OPERATOR_CLIENT_IP,
+        "client_last_seen": RB2_OPERATOR_CLIENT_LAST_SEEN,
+        "last_event": RB2_WIFI_RETURN_LAST_EVENT,
+        "last_reason": RB2_WIFI_RETURN_LAST_REASON,
+        "last_pulse": RB2_WIFI_RETURN_LAST_PULSE,
+        "loss_after_s": RB2_WIFI_RETURN_LOSS_AFTER_S,
+        "pulse_s": RB2_WIFI_RETURN_PULSE_S,
+        "max_pulses": RB2_WIFI_RETURN_MAX_PULSES,
+        "cmd": RB2_WIFI_RETURN_CMD,
+        "recent_drive_window_s": RB2_WIFI_RETURN_RECENT_DRIVE_WINDOW_S,
+        "last_drive_command": RB2_WIFI_RETURN_LAST_DRIVE_COMMAND,
+        "last_drive_time": RB2_WIFI_RETURN_LAST_DRIVE_TIME,
+        "phase": "phase 2A retour automatique limite + conduite récente 15 min requise",
+    })
+
+
+@app.route("/wifi_return_ack", methods=["POST", "GET"])
+def wifi_return_ack():
+    global RB2_WIFI_RETURN_DONE
+    global RB2_WIFI_RETURN_LOST
+    global RB2_WIFI_RETURN_LAST_EVENT
+    global RB2_WIFI_RETURN_LAST_REASON
+
+    rb2_wifi_return_ensure_watchdog()
+
+    with RB2_WIFI_RETURN_LOCK:
+        RB2_WIFI_RETURN_DONE = False
+        RB2_WIFI_RETURN_LOST = False
+        RB2_WIFI_RETURN_LAST_EVENT = "prêt"
+        RB2_WIFI_RETURN_LAST_REASON = ""
+
+    rb2_wifi_return_log("ACK opérateur retour WiFi")
+
+    return jsonify({
+        "ok": True,
+        "armed": True,
+        "ready": RB2_WIFI_RETURN_READY,
+        "active": RB2_WIFI_RETURN_ACTIVE,
+        "done": RB2_WIFI_RETURN_DONE,
+        "lost": RB2_WIFI_RETURN_LOST,
+        "last_event": RB2_WIFI_RETURN_LAST_EVENT,
+    })
+
+
+@app.route("/wifi_return_arm", methods=["POST"])
+def wifi_return_arm():
+    rb2_wifi_return_ensure_watchdog()
+
+    return jsonify({
+        "ok": True,
+        "armed": True,
+        "ready": RB2_WIFI_RETURN_READY,
+        "active": RB2_WIFI_RETURN_ACTIVE,
+        "done": RB2_WIFI_RETURN_DONE,
+        "lost": RB2_WIFI_RETURN_LOST,
+        "last_event": RB2_WIFI_RETURN_LAST_EVENT,
+        "note": "Retour WiFi toujours armé par défaut",
+    })
+
+
+
+@app.route("/zero_cam_restart", methods=["POST"])
+def zero_cam_restart():
+    """
+    Redémarre seulement le service caméra du Raspberry Pi Zero 2 W.
+    Ne redémarre pas le Pi5, ne touche pas au SLAM, ne touche pas aux moteurs.
+    """
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            ["sudo", "-n", "/usr/local/sbin/rb2-zero-cam-restart"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=75,
+            check=False,
+        )
+
+        return jsonify({
+            "ok": r.returncode == 0,
+            "returncode": r.returncode,
+            "stdout": r.stdout,
+            "stderr": r.stderr,
+        })
+
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            "ok": False,
+            "error": "Timeout pendant le redémarrage caméra Zero",
+        })
+
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+        })
+
+
 @app.route("/slam_start", methods=["POST"])
 def slam_start():
     """
-    Démarrage SLAM robuste pour RB2.
+    Démarrage SLAM rapide pour la page Terrain.
 
-    Problème corrigé : le service rb2-slam.service peut prendre 25 à 40 secondes
-    avant que /slam_toolbox apparaisse. L'ancienne route attendait trop peu et
-    retournait ERREUR même si le service finissait par démarrer.
-
-    Cette route :
-    1. démarre le service;
-    2. attend réellement /slam_toolbox;
-    3. configure si nécessaire;
-    4. active si nécessaire;
-    5. confirme l'état active [3];
-    6. confirme que /map existe dans les topics.
-
-    Elle ne dépend pas d'un echo /map --once obligatoire pour déclarer OK,
-    car le premier message /map peut prendre quelques secondes selon le début
-    de déplacement du robot.
+    Cette route ne bloque plus le navigateur.
+    Elle lance un script en arrière-plan qui démarre rb2-slam.service,
+    configure slam_toolbox et l'active.
+    Le suivi réel se fait ensuite par /slam_status.
     """
     import subprocess
-    import time
 
-    def ros_cmd(cmd, timeout=12):
-        return rb2_ros_cmd(cmd, timeout=timeout)
+    try:
+        subprocess.Popen(
+            ["sudo", "-n", "/usr/local/sbin/rb2-slam-start-bg"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
-    start_result = subprocess.run(
-        ["sudo", "-n", "systemctl", "start", "rb2-slam.service"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=15,
-        check=False,
-    )
-
-    if start_result.returncode != 0:
         return jsonify({
-            "ok": False,
-            "error": "Échec du démarrage de rb2-slam.service",
-            "start_returncode": start_result.returncode,
-            "start_stdout": start_result.stdout,
-            "start_stderr": start_result.stderr,
+            "ok": True,
+            "pending": True,
+            "message": "Démarrage SLAM lancé en arrière-plan. Suivre l'état avec /slam_status.",
         })
 
-    # Attendre longtemps : sur RB2, les journaux ont montré environ 28 à 34 s
-    # entre systemctl start et l'apparition utile de slam_toolbox.
-    node_seen = False
-    last_nodes = ""
-    for _ in range(90):  # 90 x 0,5 s = 45 s
-        nodes = ros_cmd("ros2 node list", timeout=6)
-        last_nodes = nodes.stdout.strip()
-        if "/slam_toolbox" in last_nodes.splitlines():
-            node_seen = True
-            break
-        time.sleep(0.5)
-
-    if not node_seen:
+    except Exception as e:
         return jsonify({
             "ok": False,
-            "error": "slam_toolbox non détecté après attente prolongée",
-            "start_stdout": start_result.stdout,
-            "start_stderr": start_result.stderr,
-            "nodes": last_nodes,
+            "error": str(e),
         })
-
-    # Attendre que le lifecycle réponde vraiment.
-    state = ""
-    state_result = None
-    for _ in range(30):  # 15 s max
-        state_result = ros_cmd("ros2 lifecycle get /slam_toolbox", timeout=8)
-        state = state_result.stdout.strip()
-        if state:
-            break
-        time.sleep(0.5)
-
-    configure_result = None
-    activate_result = None
-
-    if state.startswith("unconfigured") or "unconfigured [1]" in state:
-        configure_result = ros_cmd("ros2 lifecycle set /slam_toolbox configure", timeout=25)
-        time.sleep(2)
-
-    # Attendre inactive après configure.
-    state_after_configure = ""
-    for _ in range(20):
-        r = ros_cmd("ros2 lifecycle get /slam_toolbox", timeout=8)
-        state_after_configure = r.stdout.strip()
-        if state_after_configure.startswith("inactive") or state_after_configure.startswith("active"):
-            break
-        time.sleep(0.5)
-
-    if state_after_configure.startswith("inactive") or "inactive [2]" in state_after_configure:
-        activate_result = ros_cmd("ros2 lifecycle set /slam_toolbox activate", timeout=25)
-        time.sleep(2)
-
-    # Attendre active après activate.
-    final_state = ""
-    final_state_result = None
-    for _ in range(20):
-        final_state_result = ros_cmd("ros2 lifecycle get /slam_toolbox", timeout=8)
-        final_state = final_state_result.stdout.strip()
-        if final_state.startswith("active") or "active [3]" in final_state:
-            break
-        time.sleep(0.5)
-
-    # Attendre que /map apparaisse dans la liste des topics.
-    map_available = False
-    topics = ""
-    for _ in range(30):  # 15 s max
-        topics_result = ros_cmd("ros2 topic list", timeout=8)
-        topics = topics_result.stdout.strip()
-        if "/map" in topics.splitlines():
-            map_available = True
-            break
-        time.sleep(0.5)
-
-    final_active = final_state.startswith("active") or "active [3]" in final_state
-
-    return jsonify({
-        "ok": bool(final_active and map_available),
-        "state": final_state,
-        "map": map_available,
-        "map_ready": map_available,
-        "start_returncode": start_result.returncode,
-        "start_stdout": start_result.stdout,
-        "start_stderr": start_result.stderr,
-        "initial_lifecycle": state,
-        "state_after_configure": state_after_configure,
-        "configure_returncode": configure_result.returncode if configure_result else None,
-        "configure_stdout": configure_result.stdout if configure_result else "",
-        "configure_stderr": configure_result.stderr if configure_result else "",
-        "activate_returncode": activate_result.returncode if activate_result else None,
-        "activate_stdout": activate_result.stdout if activate_result else "",
-        "activate_stderr": activate_result.stderr if activate_result else "",
-        "topics": topics,
-    })
 
 
 @app.route("/slam_stop", methods=["POST"])
@@ -9723,6 +10633,457 @@ def system_shutdown_all():
 
 
 
+
+
+
+
+# === RB2 WIFI TOGGLE BUTTON - BEGIN ===
+# Bouton unique réseau pour /terrain.
+# Vert = Wi-Fi local wlan0 actif.
+# Rouge = Wi-Fi local wlan0 coupé.
+# Ne touche jamais à l'AP RB2 wlxXXXXXXXXXXXX.
+
+import os as _rb2_wifi_os
+import subprocess as _rb2_wifi_subprocess
+import time as _rb2_wifi_time
+from flask import request as _rb2_wifi_request
+from flask import jsonify as _rb2_wifi_jsonify
+
+_RB2_WIFI_SCRIPT = "/usr/local/sbin/rb2-wifi-mode"
+_RB2_LOCAL_WIFI_IF = "wlan0"
+
+def _rb2_wifi_run(action):
+    if action not in ("terrain", "bureau", "status"):
+        return {
+            "ok": False,
+            "action": action,
+            "output": "Action réseau refusée.",
+            "returncode": 2,
+        }
+
+    if _rb2_wifi_os.geteuid() == 0:
+        cmd = [_RB2_WIFI_SCRIPT, action]
+    else:
+        cmd = ["sudo", "-n", _RB2_WIFI_SCRIPT, action]
+
+    try:
+        p = _rb2_wifi_subprocess.run(
+            cmd,
+            text=True,
+            stdout=_rb2_wifi_subprocess.PIPE,
+            stderr=_rb2_wifi_subprocess.STDOUT,
+            timeout=15,
+        )
+        return {
+            "ok": p.returncode == 0,
+            "action": action,
+            "output": p.stdout.strip(),
+            "returncode": p.returncode,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "action": action,
+            "output": str(e),
+            "returncode": 99,
+        }
+
+def _rb2_wlan0_state():
+    ip_line = ""
+    nmcli_line = ""
+
+    try:
+        p_ip = _rb2_wifi_subprocess.run(
+            ["ip", "-br", "addr", "show", _RB2_LOCAL_WIFI_IF],
+            text=True,
+            stdout=_rb2_wifi_subprocess.PIPE,
+            stderr=_rb2_wifi_subprocess.STDOUT,
+            timeout=4,
+        )
+        ip_line = p_ip.stdout.strip()
+    except Exception as e:
+        ip_line = "ip error: " + str(e)
+
+    try:
+        p_nm = _rb2_wifi_subprocess.run(
+            ["nmcli", "-t", "-f", "DEVICE,STATE", "device", "status"],
+            text=True,
+            stdout=_rb2_wifi_subprocess.PIPE,
+            stderr=_rb2_wifi_subprocess.STDOUT,
+            timeout=4,
+        )
+        for line in p_nm.stdout.splitlines():
+            if line.startswith(_RB2_LOCAL_WIFI_IF + ":"):
+                nmcli_line = line.strip()
+                break
+    except Exception as e:
+        nmcli_line = "nmcli error: " + str(e)
+
+    parts = ip_line.split()
+    admin_state = parts[1] if len(parts) >= 2 else "UNKNOWN"
+
+    has_ipv4 = False
+    for part in parts[2:]:
+        if "/" in part and "." in part:
+            has_ipv4 = True
+            break
+
+    # Pour RB2, on considère le Wi-Fi local ON seulement si wlan0 est UP avec une IPv4.
+    local_on = (admin_state == "UP" and has_ipv4)
+
+    return {
+        "ok": True,
+        "interface": _RB2_LOCAL_WIFI_IF,
+        "local_wifi": "ON" if local_on else "OFF",
+        "admin_state": admin_state,
+        "has_ipv4": has_ipv4,
+        "ip_line": ip_line,
+        "nmcli_line": nmcli_line,
+    }
+
+@app.route("/rb2_network/status", methods=["GET"])
+def rb2_network_status():
+    return _rb2_wifi_jsonify(_rb2_wlan0_state())
+
+@app.route("/rb2_network/terrain", methods=["POST"])
+def rb2_network_terrain():
+    result = _rb2_wifi_run("terrain")
+    _rb2_wifi_time.sleep(0.5)
+    state = _rb2_wlan0_state()
+    return _rb2_wifi_jsonify({
+        "ok": result.get("ok", False),
+        "action": "terrain",
+        "result": result,
+        "state": state,
+    })
+
+@app.route("/rb2_network/bureau", methods=["POST"])
+def rb2_network_bureau():
+    result = _rb2_wifi_run("bureau")
+    _rb2_wifi_time.sleep(1.5)
+    state = _rb2_wlan0_state()
+    return _rb2_wifi_jsonify({
+        "ok": result.get("ok", False),
+        "action": "bureau",
+        "result": result,
+        "state": state,
+    })
+
+@app.route("/rb2_network/toggle", methods=["POST"])
+def rb2_network_toggle():
+    state_before = _rb2_wlan0_state()
+
+    if state_before.get("local_wifi") == "ON":
+        action = "terrain"
+    else:
+        action = "bureau"
+
+    result = _rb2_wifi_run(action)
+    _rb2_wifi_time.sleep(1.5)
+    state_after = _rb2_wlan0_state()
+
+    return _rb2_wifi_jsonify({
+        "ok": result.get("ok", False),
+        "action": action,
+        "before": state_before,
+        "after": state_after,
+        "result": result,
+    })
+
+@app.after_request
+def rb2_inject_wifi_toggle_button(response):
+    try:
+        if _rb2_wifi_request.path != "/terrain":
+            return response
+
+        content_type = response.headers.get("Content-Type", "")
+        if "text/html" not in content_type.lower():
+            return response
+
+        html = response.get_data(as_text=True)
+
+        if "rb2-wifi-toggle-panel" in html:
+            return response
+
+        if "</body>" not in html:
+            return response
+
+        panel = """
+<div id="rb2-wifi-toggle-panel">
+  <button id="rb2-wifi-toggle-button" class="rb2-wifi-unknown" onclick="rb2WifiToggle()" title="Bascule wlan0 seulement. Ne touche pas à l'AP RB2.">
+    <span id="rb2-wifi-toggle-main">Wi-Fi local</span>
+    <span id="rb2-wifi-toggle-state">--</span>
+  </button>
+</div>
+
+<style>
+#rb2-wifi-toggle-panel {
+  position: fixed;
+  top: 7px;
+  right: 8px;
+  z-index: 99999;
+  font-family: Arial, sans-serif;
+}
+
+#rb2-wifi-toggle-button {
+  width: 82px;
+  height: 34px;
+  border-radius: 7px;
+  border: 1px solid #222;
+  font-weight: bold;
+  cursor: pointer;
+  box-shadow: 0 0 5px rgba(0,0,0,0.45);
+  padding: 2px 4px;
+  line-height: 13px;
+}
+
+#rb2-wifi-toggle-main {
+  display: block;
+  font-size: 11px;
+}
+
+#rb2-wifi-toggle-state {
+  display: block;
+  font-size: 12px;
+}
+
+.rb2-wifi-on {
+  background: #1fa63a;
+  color: #ffffff;
+}
+
+.rb2-wifi-off {
+  background: #c62828;
+  color: #ffffff;
+}
+
+.rb2-wifi-unknown {
+  background: #777777;
+  color: #ffffff;
+}
+</style>
+
+<script>
+let rb2WifiCurrentState = "UNKNOWN";
+
+function rb2WifiPaint(state) {
+  const btn = document.getElementById("rb2-wifi-toggle-button");
+  const label = document.getElementById("rb2-wifi-toggle-state");
+
+  btn.classList.remove("rb2-wifi-on", "rb2-wifi-off", "rb2-wifi-unknown");
+
+  if (state === "ON") {
+    rb2WifiCurrentState = "ON";
+    btn.classList.add("rb2-wifi-on");
+    label.textContent = "ON";
+    btn.title = "Wi-Fi local wlan0 actif. Clic = couper wlan0.";
+  } else if (state === "OFF") {
+    rb2WifiCurrentState = "OFF";
+    btn.classList.add("rb2-wifi-off");
+    label.textContent = "OFF";
+    btn.title = "Wi-Fi local wlan0 coupé. Clic = réactiver wlan0.";
+  } else {
+    rb2WifiCurrentState = "UNKNOWN";
+    btn.classList.add("rb2-wifi-unknown");
+    label.textContent = "--";
+    btn.title = "État Wi-Fi local inconnu.";
+  }
+}
+
+async function rb2WifiRefresh() {
+  try {
+    const r = await fetch("/rb2_network/status", { cache: "no-store" });
+    const data = await r.json();
+    rb2WifiPaint(data.local_wifi || "UNKNOWN");
+  } catch (e) {
+    rb2WifiPaint("UNKNOWN");
+  }
+}
+
+async function rb2WifiToggle() {
+  if (rb2WifiCurrentState === "ON") {
+    const ok = confirm(
+      "Couper le Wi-Fi local wlan0 ?\\n\\n" +
+      "Le réseau local 192.168.2.221 peut devenir inaccessible.\\n" +
+      "L'AP RB2 10.42.0.1 restera actif."
+    );
+    if (!ok) return;
+  } else if (rb2WifiCurrentState === "OFF") {
+    const ok = confirm(
+      "Réactiver le Wi-Fi local wlan0 ?\\n\\n" +
+      "L'AP RB2 10.42.0.1 restera actif."
+    );
+    if (!ok) return;
+  } else {
+    const ok = confirm(
+      "État Wi-Fi local inconnu. Tenter une bascule quand même ?\\n\\n" +
+      "L'AP RB2 ne sera pas touché."
+    );
+    if (!ok) return;
+  }
+
+  const label = document.getElementById("rb2-wifi-toggle-state");
+  label.textContent = "...";
+
+  try {
+    const r = await fetch("/rb2_network/toggle", { method: "POST" });
+    const data = await r.json();
+
+    if (data.after && data.after.local_wifi) {
+      rb2WifiPaint(data.after.local_wifi);
+    }
+
+    setTimeout(rb2WifiRefresh, 1500);
+    setTimeout(rb2WifiRefresh, 5000);
+  } catch (e) {
+    /*
+      Si on vient de couper wlan0 depuis 192.168.2.221,
+      la page peut perdre le lien. C'est normal.
+    */
+    rb2WifiPaint("OFF");
+  }
+}
+
+window.addEventListener("load", rb2WifiRefresh);
+setInterval(rb2WifiRefresh, 10000);
+</script>
+"""
+
+        html = html.replace("</body>", panel + "\n</body>")
+        response.set_data(html)
+        response.headers["Content-Length"] = str(len(response.get_data()))
+        return response
+
+    except Exception:
+        return response
+
+# === RB2 WIFI TOGGLE BUTTON - END ===
+
+
+
+# -----------------------------------------------------------------------------
+# RB2_RETOUR_AVANT_TERRAIN_UI_20260622
+# Ajoute le bouton RETOUR AVANT dans /terrain sans remplacer le moteur V22B.
+# -----------------------------------------------------------------------------
+try:
+    _RB2_RETURN_FORWARD_MARKER = "RB2_RETOUR_AVANT_TERRAIN_UI_20260622"
+    _RB2_RETURN_FORWARD_UI = '\n<!-- RB2_RETOUR_AVANT_TERRAIN_UI_20260622 -->\n<style>\n  .rb2-return-forward-wrap {\n    display: inline-flex;\n    align-items: center;\n    justify-content: flex-start;\n    gap: 5px;\n    margin-left: 6px;\n    white-space: nowrap;\n    vertical-align: middle;\n  }\n\n  .rb2-return-forward-wrap.floating {\n    position: fixed;\n    top: 44px;\n    right: 8px;\n    z-index: 9999;\n    background: rgba(0, 0, 0, 0.72);\n    border: 1px solid rgba(255, 170, 60, 0.5);\n    border-radius: 10px;\n    padding: 4px;\n  }\n\n  .rb2-return-forward-btn {\n    display: inline-flex;\n    align-items: center;\n    justify-content: center;\n    min-height: 28px;\n    padding: 5px 9px;\n    border: 1px solid #ff9f1a;\n    border-radius: 9px;\n    background: #3a2208;\n    color: #ffe0aa;\n    font-weight: 900;\n    font-size: 12px;\n    line-height: 1;\n    cursor: pointer;\n    white-space: nowrap;\n  }\n\n  .rb2-return-forward-btn:hover {\n    filter: brightness(1.12);\n  }\n\n  .rb2-return-forward-btn.running {\n    border-color: #ff4d4d;\n    background: #4a1010;\n    color: #ffd0d0;\n  }\n\n  .rb2-return-forward-btn.blocked,\n  .rb2-return-forward-btn.error {\n    border-color: #ff3333;\n    background: #3d0808;\n    color: #ffd0d0;\n  }\n\n  .rb2-return-forward-btn.finished {\n    border-color: #55dd88;\n    background: #0f331d;\n    color: #caffd8;\n  }\n\n  .rb2-return-forward-btn:disabled {\n    opacity: 0.65;\n    cursor: not-allowed;\n  }\n\n  .rb2-return-forward-status {\n    display: inline-block;\n    max-width: 210px;\n    overflow: hidden;\n    text-overflow: ellipsis;\n    font-size: 11px;\n    color: #ffdca8;\n    opacity: 0.9;\n  }\n</style>\n\n<script>\n(function () {\n  "use strict";\n\n  const MARKER = "RB2_RETOUR_AVANT_TERRAIN_UI_20260622";\n\n  function rb2ReturnForwardHost() {\n    return document.querySelector(".rb2-top-button-group")\n        || document.querySelector(".rb2-terrain-top-buttons")\n        || document.querySelector(".terrain-top-buttons")\n        || document.querySelector(".terrain-topbar-actions")\n        || document.querySelector(".top-button-group")\n        || document.querySelector(".rb2-camera-info-bar")\n        || document.body;\n  }\n\n  function rb2ReturnForwardSetText(id, text) {\n    const el = document.getElementById(id);\n    if (el) el.textContent = text || "";\n  }\n\n  function rb2ReturnForwardButton() {\n    return document.getElementById("rb2-return-forward-btn");\n  }\n\n  function rb2ReturnForwardStatusLabel() {\n    return document.getElementById("rb2-return-forward-status");\n  }\n\n  function rb2ReturnForwardInstall() {\n    if (document.getElementById("rb2-return-forward-wrap")) return;\n\n    const host = rb2ReturnForwardHost();\n    const wrap = document.createElement("span");\n    wrap.id = "rb2-return-forward-wrap";\n    wrap.className = "rb2-return-forward-wrap";\n    wrap.setAttribute("data-rb2-marker", MARKER);\n\n    if (host === document.body) {\n      wrap.classList.add("floating");\n    }\n\n    const btn = document.createElement("button");\n    btn.id = "rb2-return-forward-btn";\n    btn.className = "rb2-return-forward-btn";\n    btn.type = "button";\n    btn.textContent = "RETOUR AVANT";\n    btn.title = "Demi-tour 180° physique, puis retour sur la dernière trace en avançant";\n\n    const st = document.createElement("span");\n    st.id = "rb2-return-forward-status";\n    st.className = "rb2-return-forward-status";\n    st.textContent = "prêt";\n\n    wrap.appendChild(btn);\n    wrap.appendChild(st);\n    host.appendChild(wrap);\n\n    btn.addEventListener("click", rb2ReturnForwardClick);\n  }\n\n  async function rb2ReturnForwardGetStatus() {\n    const r = await fetch("/trace_follow_status", { method: "GET", cache: "no-store" });\n    return await r.json();\n  }\n\n  function rb2ReturnForwardApplyStatus(j) {\n    const btn = rb2ReturnForwardButton();\n    const st = rb2ReturnForwardStatusLabel();\n    if (!btn || !st) return;\n\n    const running = !!(j && j.running);\n    const state = j && j.state ? String(j.state) : "idle";\n    const mode = j && j.mode ? String(j.mode) : "";\n    const msg = j && j.message ? String(j.message) : "";\n    const step = j && j.step ? Number(j.step) : 0;\n    const total = j && j.total ? Number(j.total) : 0;\n    const isForward = mode.indexOf("retour_avant") >= 0;\n\n    btn.classList.remove("running", "blocked", "error", "finished");\n    btn.disabled = false;\n\n    if (running && isForward) {\n      btn.classList.add("running");\n      btn.textContent = total > 0 ? ("ARRÊT RETOUR " + step + "/" + total) : "ARRÊT RETOUR";\n      st.textContent = msg || "retour avant actif";\n      return;\n    }\n\n    if (running && !isForward) {\n      btn.classList.add("running");\n      btn.textContent = "ARRÊTER REJEU";\n      st.textContent = "autre rejeu actif";\n      return;\n    }\n\n    if (!running && isForward && state === "finished") {\n      btn.classList.add("finished");\n      btn.textContent = "RETOUR OK";\n      st.textContent = "terminé";\n      return;\n    }\n\n    if (!running && isForward && state === "blocked") {\n      btn.classList.add("blocked");\n      btn.textContent = "RETOUR BLOQUÉ";\n      st.textContent = j.last_error || msg || "bloqué";\n      return;\n    }\n\n    if (!running && isForward && state === "error") {\n      btn.classList.add("error");\n      btn.textContent = "RETOUR ERREUR";\n      st.textContent = j.last_error || msg || "erreur";\n      return;\n    }\n\n    if (!running && isForward && state === "stopped") {\n      btn.textContent = "RETOUR AVANT";\n      st.textContent = "arrêté";\n      return;\n    }\n\n    btn.textContent = "RETOUR AVANT";\n    st.textContent = "prêt";\n  }\n\n  async function rb2ReturnForwardRefresh() {\n    rb2ReturnForwardInstall();\n\n    try {\n      const j = await rb2ReturnForwardGetStatus();\n      rb2ReturnForwardApplyStatus(j);\n    } catch (e) {\n      const btn = rb2ReturnForwardButton();\n      if (btn) {\n        btn.textContent = "RETOUR ?";\n        btn.title = "Statut trace inaccessible";\n      }\n      rb2ReturnForwardSetText("rb2-return-forward-status", "statut ?");\n    }\n  }\n\n  async function rb2ReturnForwardStop() {\n    const btn = rb2ReturnForwardButton();\n    if (btn) btn.textContent = "ARRÊT...";\n\n    try {\n      await fetch("/trace_follow_stop", { method: "POST", cache: "no-store" });\n    } catch (e) {\n      alert("Erreur pendant l\'arrêt du retour/rejeu : " + e);\n    }\n\n    setTimeout(rb2ReturnForwardRefresh, 350);\n  }\n\n  async function rb2ReturnForwardStart() {\n    const btn = rb2ReturnForwardButton();\n\n    let preview = null;\n    try {\n      const r = await fetch("/trace_return_forward_preview", { method: "GET", cache: "no-store" });\n      preview = await r.json();\n    } catch (e) {\n      alert("Impossible de lire l\'aperçu RETOUR AVANT : " + e);\n      return;\n    }\n\n    if (!preview || preview.ok !== true) {\n      alert("RETOUR AVANT refusé : " + ((preview && preview.error) ? preview.error : "aucun aperçu disponible"));\n      return;\n    }\n\n    const file = preview.file || "dernière trace";\n    const segments = preview.segments || 0;\n    const duration = preview.total_duration_s_after_turn || 0;\n    const turnCmd = preview.turn_command || "d20,-20";\n    const odomTarget = preview.turn_odom_target_deg || 360;\n    const physicalTurn = preview.turn_first_deg || 180;\n\n    const ok = confirm(\n      "Démarrer RETOUR AVANT ?\\n\\n" +\n      "Fichier : " + file + "\\n" +\n      "Segments : " + segments + "\\n" +\n      "Demi-tour physique : " + physicalTurn + "°\\n" +\n      "Cible odométrique : " + odomTarget + "°\\n" +\n      "Commande demi-tour : " + turnCmd + "\\n" +\n      "Durée retour après demi-tour : " + Number(duration).toFixed(1) + " s\\n\\n" +\n      "Le robot fera d\'abord son demi-tour, puis reviendra en avançant.\\n" +\n      "Sécurité LIDAR active. Gardez la main près de STOP."\n    );\n\n    if (!ok) return;\n\n    if (btn) {\n      btn.disabled = true;\n      btn.textContent = "DÉMARRAGE...";\n    }\n\n    try {\n      const r = await fetch("/trace_return_forward_start", { method: "POST", cache: "no-store" });\n      const j = await r.json();\n\n      if (!r.ok || !j.ok) {\n        alert("RETOUR AVANT refusé : " + (j.error || "erreur inconnue"));\n      }\n    } catch (e) {\n      alert("Erreur RETOUR AVANT : " + e);\n    }\n\n    if (btn) btn.disabled = false;\n    setTimeout(rb2ReturnForwardRefresh, 350);\n  }\n\n  async function rb2ReturnForwardClick() {\n    try {\n      const st = await rb2ReturnForwardGetStatus();\n      if (st && st.running) {\n        await rb2ReturnForwardStop();\n        return;\n      }\n    } catch (e) {\n      // Si le statut ne répond pas, on ne démarre pas à l\'aveugle.\n      alert("Statut trace inaccessible. RETOUR AVANT non démarré.");\n      return;\n    }\n\n    await rb2ReturnForwardStart();\n  }\n\n  document.addEventListener("DOMContentLoaded", function () {\n    rb2ReturnForwardInstall();\n    rb2ReturnForwardRefresh();\n    setInterval(rb2ReturnForwardRefresh, 1000);\n  });\n\n  setTimeout(function () {\n    rb2ReturnForwardInstall();\n    rb2ReturnForwardRefresh();\n  }, 800);\n})();\n</script>\n'
+    if _RB2_RETURN_FORWARD_MARKER not in TERRAIN_HTML:
+        if "</body>" in TERRAIN_HTML:
+            TERRAIN_HTML = TERRAIN_HTML.replace("</body>", _RB2_RETURN_FORWARD_UI + "\n</body>", 1)
+        else:
+            TERRAIN_HTML = TERRAIN_HTML + _RB2_RETURN_FORWARD_UI
+except Exception as e:
+    try:
+        print("RB2 RETOUR AVANT UI non injecté:", e)
+    except Exception:
+        pass
+
+
+# -----------------------------------------------------------------------------
+# RB2_RETOUR_BOUTON_COMPACT_VERT_ROUGE_20260622
+# Rend le bouton RETOUR compact :
+# - texte visible seulement "RETOUR";
+# - vert au repos / terminé;
+# - rouge pendant le retour;
+# - explications au survol de la souris;
+# - commentaires visibles supprimés.
+# -----------------------------------------------------------------------------
+try:
+    _RB2_RETOUR_COMPACT_MARKER = "RB2_RETOUR_BOUTON_COMPACT_VERT_ROUGE_20260622"
+    _RB2_RETOUR_COMPACT_UI = '\n<!-- RB2_RETOUR_BOUTON_COMPACT_VERT_ROUGE_20260622 -->\n<style>\n  #rb2-return-forward-wrap {\n    gap: 0 !important;\n    margin-left: 5px !important;\n  }\n\n  #rb2-return-forward-status,\n  .rb2-return-forward-status {\n    display: none !important;\n    visibility: hidden !important;\n    width: 0 !important;\n    max-width: 0 !important;\n    min-width: 0 !important;\n    margin: 0 !important;\n    padding: 0 !important;\n    overflow: hidden !important;\n  }\n\n  #rb2-return-forward-btn.rb2-retour-compact {\n    min-width: 64px !important;\n    max-width: 74px !important;\n    height: 28px !important;\n    min-height: 28px !important;\n    padding: 4px 9px !important;\n    border-radius: 8px !important;\n    font-size: 12px !important;\n    font-weight: 900 !important;\n    line-height: 1 !important;\n    text-align: center !important;\n    white-space: nowrap !important;\n  }\n\n  #rb2-return-forward-btn.rb2-retour-green {\n    background: #064b20 !important;\n    border-color: #44d36f !important;\n    color: #d8ffe4 !important;\n  }\n\n  #rb2-return-forward-btn.rb2-retour-red {\n    background: #7a1010 !important;\n    border-color: #ff4d4d !important;\n    color: #ffe0e0 !important;\n  }\n</style>\n\n<script>\n(function () {\n  "use strict";\n\n  const MARKER = "RB2_RETOUR_BOUTON_COMPACT_VERT_ROUGE_20260622";\n\n  const TITLE_READY =\n    "RETOUR : démarre le retour automatique. RB2 fait d\'abord son demi-tour calibré, puis revient en avançant sur la dernière trace enregistrée. Garder STOP à portée.";\n\n  const TITLE_RUNNING =\n    "RETOUR en cours : RB2 exécute le demi-tour puis le retour sur trace inverse. Cliquer sur le bouton rouge pour arrêter le retour automatique.";\n\n  const TITLE_DONE =\n    "RETOUR terminé ou arrêté : le bouton est prêt pour un autre retour. Pour un meilleur résultat, utiliser une trace courte et propre.";\n\n  const TITLE_UNKNOWN =\n    "RETOUR : statut momentanément inaccessible. Vérifier le service RB2 si le problème persiste.";\n\n  function rb2RetourBtn() {\n    return document.getElementById("rb2-return-forward-btn");\n  }\n\n  function rb2RetourHideStatus() {\n    document.querySelectorAll("#rb2-return-forward-status, .rb2-return-forward-status").forEach(function (el) {\n      el.textContent = "";\n      el.style.display = "none";\n      el.style.visibility = "hidden";\n      el.style.width = "0";\n      el.style.maxWidth = "0";\n      el.style.margin = "0";\n      el.style.padding = "0";\n    });\n  }\n\n  function rb2RetourSetVisual(running, titleText) {\n    const btn = rb2RetourBtn();\n    if (!btn) return;\n\n    btn.textContent = "RETOUR";\n    btn.classList.add("rb2-retour-compact");\n    btn.classList.remove("rb2-retour-green", "rb2-retour-red");\n\n    if (running) {\n      btn.classList.add("rb2-retour-red");\n      btn.title = titleText || TITLE_RUNNING;\n    } else {\n      btn.classList.add("rb2-retour-green");\n      btn.title = titleText || TITLE_READY;\n    }\n\n    rb2RetourHideStatus();\n  }\n\n  async function rb2RetourRefreshCompact() {\n    const btn = rb2RetourBtn();\n    if (!btn) {\n      return;\n    }\n\n    rb2RetourHideStatus();\n\n    try {\n      const r = await fetch("/trace_follow_status", {\n        method: "GET",\n        cache: "no-store"\n      });\n\n      const j = await r.json();\n      const running = !!(j && j.running);\n      const state = j && j.state ? String(j.state) : "";\n      const mode = j && j.mode ? String(j.mode) : "";\n      const isRetour = mode.indexOf("retour_avant") >= 0 || mode.indexOf("return_forward") >= 0;\n\n      if (running && isRetour) {\n        rb2RetourSetVisual(true, TITLE_RUNNING);\n        return;\n      }\n\n      if (!running && isRetour && (state === "finished" || state === "stopped")) {\n        rb2RetourSetVisual(false, TITLE_DONE);\n        return;\n      }\n\n      if (!running && isRetour && (state === "error" || state === "blocked")) {\n        const err = j.last_error ? String(j.last_error) : "dernier retour non complété";\n        rb2RetourSetVisual(false, "RETOUR : prêt. Dernier état : " + err + ". Vérifier la trace, les dégagements et relancer au besoin.");\n        return;\n      }\n\n      rb2RetourSetVisual(false, TITLE_READY);\n    } catch (e) {\n      rb2RetourSetVisual(false, TITLE_UNKNOWN);\n    }\n  }\n\n  function rb2RetourInstallCompactWatcher() {\n    const btn = rb2RetourBtn();\n    if (!btn) return;\n\n    btn.setAttribute("data-rb2-compact-marker", MARKER);\n\n    const observer = new MutationObserver(function () {\n      const b = rb2RetourBtn();\n      if (b && b.textContent.trim() !== "RETOUR") {\n        b.textContent = "RETOUR";\n      }\n      rb2RetourHideStatus();\n    });\n\n    observer.observe(btn, {\n      childList: true,\n      characterData: true,\n      subtree: true,\n      attributes: true\n    });\n  }\n\n  document.addEventListener("DOMContentLoaded", function () {\n    setTimeout(function () {\n      rb2RetourInstallCompactWatcher();\n      rb2RetourRefreshCompact();\n    }, 500);\n\n    setInterval(rb2RetourRefreshCompact, 500);\n  });\n\n  setTimeout(function () {\n    rb2RetourInstallCompactWatcher();\n    rb2RetourRefreshCompact();\n  }, 1200);\n})();\n</script>\n'
+    if _RB2_RETOUR_COMPACT_MARKER not in TERRAIN_HTML:
+        if "</body>" in TERRAIN_HTML:
+            TERRAIN_HTML = TERRAIN_HTML.replace("</body>", _RB2_RETOUR_COMPACT_UI + "\n</body>", 1)
+        else:
+            TERRAIN_HTML = TERRAIN_HTML + _RB2_RETOUR_COMPACT_UI
+except Exception as e:
+    try:
+        print("RB2 bouton RETOUR compact non injecté:", e)
+    except Exception:
+        pass
+
+
+# RB2_LIDAR_MAP_CLEARANCE_OVERRIDE_START
+def rb2_lidar_map_status_with_clearance():
+    """
+    Correction RB2:
+    /lidar_map garde les points de la carte, mais ajoute aussi les vraies
+    distances utiles corrigées depuis /tmp/rb2_lidar.json.
+    """
+    import os as _rb2_os
+    import json as _rb2_json
+    import time as _rb2_time
+
+    lidar_map_file = "/tmp/rb2_lidar_map.json"
+    lidar_summary_file = "/tmp/rb2_lidar.json"
+
+    try:
+        if not _rb2_os.path.exists(lidar_map_file):
+            return jsonify({
+                "ok": False,
+                "error": "lidar_map absent",
+                "file": lidar_map_file
+            })
+
+        with open(lidar_map_file, "r", encoding="utf-8") as f:
+            data = _rb2_json.load(f)
+
+        stamp = data.get("stamp") or data.get("timestamp") or 0
+        try:
+            age_s = max(0.0, _rb2_time.time() - float(stamp))
+        except Exception:
+            age_s = None
+
+        clearance = {}
+
+        if _rb2_os.path.exists(lidar_summary_file):
+            with open(lidar_summary_file, "r", encoding="utf-8") as f:
+                summary = _rb2_json.load(f)
+
+            summary_clearance = summary.get("clearance") if isinstance(summary.get("clearance"), dict) else {}
+
+            for k in ["front_cm", "back_cm", "left_cm", "right_cm", "min_cm"]:
+                v = summary.get(k, None)
+                if v is None:
+                    v = summary_clearance.get(k, None)
+
+                try:
+                    if v is not None:
+                        clearance[k] = float(v)
+                except Exception:
+                    pass
+
+            if clearance:
+                data["clearance"] = clearance
+                for k, v in clearance.items():
+                    data[k] = v
+
+            if isinstance(summary.get("robot"), dict):
+                data["robot"] = summary["robot"]
+
+            if isinstance(summary.get("rb2_filter"), dict):
+                data["rb2_filter"] = summary["rb2_filter"]
+
+        return jsonify({
+            "ok": True,
+            "file": lidar_map_file,
+            "age_s": age_s,
+            "data": data,
+            "clearance": clearance if clearance else None
+        })
+
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "file": lidar_map_file
+        }), 500
+
+app.view_functions["lidar_map_status"] = rb2_lidar_map_status_with_clearance
+# RB2_LIDAR_MAP_CLEARANCE_OVERRIDE_END
+
+
 if __name__ == "__main__":
     try:
         esp32.connect()
@@ -9730,3 +11091,18 @@ if __name__ == "__main__":
     finally:
         esp32.stop()
         esp32.close()
+
+
+# RB2_RETOUR_AVANT_V22C_1000DEG_90S
+# Correction RETOUR AVANT :
+# - Ancienne cible : 360° odométriques.
+# - Essai terrain : 253° odométriques donnaient environ 45° physiques.
+# - Nouvelle cible : 1000° odométriques pour approcher 180° physiques.
+# - Timeout porté à 90 s pour éviter l'arrêt prématuré.
+
+
+# RB2_RETOUR_AVANT_V22D_500DEG_60S
+# Correction RETOUR AVANT :
+# - Essai V22C : 1000° odométriques donnaient environ 360° physiques ou plus.
+# - Nouvelle cible : 500° odométriques pour viser environ 180° physiques.
+# - Timeout : 60 s, conservateur.
