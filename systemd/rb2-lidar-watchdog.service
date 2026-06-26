@@ -1,0 +1,14 @@
+[Unit]
+Description=RB2 LIDAR stale data watchdog
+After=rb2-bringup.service rb2-lidar-json.service rb2-lidar-map-json.service
+Wants=rb2-bringup.service rb2-lidar-json.service rb2-lidar-map-json.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /opt/rb2/rb2_lidar_watchdog.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
