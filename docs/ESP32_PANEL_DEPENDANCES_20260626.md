@@ -182,3 +182,33 @@ Avant tout nettoyage de code, il faut vérifier et récupérer si nécessaire :
 - /opt/rb2/rb2_esp32.py
 
 Aucun nettoyage de esp32_panel.py ne doit commencer tant que cette dépendance centrale n'est pas documentée et versionnée.
+
+## Vérification rb2_esp32.py - 2026-06-26
+
+Le module Python suivant a été vérifié sur le Pi5 :
+
+- /opt/rb2/rb2_esp32.py
+
+Il existe en production avec les permissions suivantes :
+
+- -rwxr-xr-x
+
+Empreinte SHA256 relevée sur le Pi5 :
+
+- a6c810c8645ec572fb837a876d54df9c80f1b498fe473fc865bdf93b0c20304c
+
+Le fichier a été récupéré et ajouté au dépôt sous :
+
+- opt/rb2/rb2_esp32.py
+
+Statut :
+
+- dépendance centrale maintenant versionnée;
+- utilisée par opt/rb2/esp32_panel.py;
+- critique pour la communication avec l'ESP32.
+
+Règle de prudence :
+
+- ne pas modifier rb2_esp32.py sans analyse séparée;
+- ne pas modifier son protocole série;
+- ne pas modifier les méthodes utilisées par esp32_panel.py sans validation réelle sur RB2.
