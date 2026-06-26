@@ -1,0 +1,17 @@
+# Autorisations limitees pour la page de secours du Zero 2 W
+# Fichier reel sur le Pi5 : /etc/sudoers.d/rb2-zero-secours
+
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart rb2-esp32-panel.service
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block rb2-esp32-panel.service
+
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart rb2-bringup.service
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block rb2-bringup.service
+
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart rb2-lidar-json.service
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block rb2-lidar-json.service
+
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart rb2-lidar-map-json.service
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block rb2-lidar-map-json.service
+
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart rb2-wifi-dual-loss-return.service
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block rb2-wifi-dual-loss-return.service

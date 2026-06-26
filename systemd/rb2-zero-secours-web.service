@@ -1,0 +1,15 @@
+[Unit]
+Description=RB2 page web de secours Zero 2 W
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rj
+WorkingDirectory=/home/rj/rb2_zero_secours
+ExecStart=/usr/bin/python3 /home/rj/rb2_zero_secours/rb2_zero_secours_web.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+# Autorisation limitee pour la page de secours locale du Zero 2 W
+# Fichier reel sur le Zero : /etc/sudoers.d/rb2-zero-secours-local
+
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart rb2-zero-cam.service
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block rb2-zero-cam.service
