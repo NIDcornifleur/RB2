@@ -5354,7 +5354,7 @@ function currentPanMax() {
 }
 
 function isDriveCommand(command) {
-  return /^d-?\d+,-?\d+$/.test(String(command || ""));
+  return /^d-?\\d+,-?\\d+$/.test(String(command || ""));
 }
 
 function cmd(command) {
