@@ -137,3 +137,25 @@ Cependant, le dépôt contient une incohérence : rb2_lidar_map_json.py est abse
 Avant toute suppression de dossier, il faut vérifier sur le Pi5 si /opt/rb2/rb2_lidar_map_json.py existe réellement en production.
 
 Aucun dossier ne doit être supprimé avant cette vérification.
+
+## Vérification production Pi5 : rb2_lidar_map_json.py
+
+Date : 2026-06-26
+
+Le fichier de production suivant existe sur le Pi5 :
+
+- /opt/rb2/rb2_lidar_map_json.py
+
+Empreinte SHA256 relevée sur le Pi5 :
+
+- 334200be21f0c3baeaca7a4a752cffce4d685a75fd9cb4068299b25c0ad42956
+
+Cette empreinte est différente de celle du fichier présent dans le dépôt PC sous opt-rb2 :
+
+- 619BC93F4A46877A5A4860F144D8D948E1C76C31875EE31B75FC239949E7041C
+
+Conclusion :
+
+- le fichier opt-rb2/rb2_lidar_map_json.py du dépôt PC n'est pas la même version que le fichier actif en production sur le Pi5;
+- il ne faut pas remplacer le fichier du Pi5 par la version opt-rb2 du dépôt;
+- une copie de preuve de la version production a été ajoutée sous production_snapshots/opt_rb2_20260626/rb2_lidar_map_json.py.
