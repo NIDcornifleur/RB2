@@ -350,3 +350,134 @@ Ne pas supprimer de service systemd tant que les commandes suivantes n'ont pas �
 - ls -l du script appelé
 
 Le dépôt doit d'abord devenir complet et documenté avant de retirer les services anciens ou doublons.
+
+## Vérification réelle sur le Pi5 - 2026-06-26
+
+Les services systemd ont été vérifiés directement sur le Pi5 RB2.
+
+### Services enabled et active
+
+Les services suivants sont activés au démarrage et actifs :
+
+- rb2-ap-ip.service
+- rb2-bringup.service
+- rb2-esp32-panel.service
+- rb2-imu-json.service
+- rb2-lidar-json.service
+- rb2-lidar-map-json.service
+- rb2-shutdown-zero-before-pi5.service
+- rb2-usb-camera.service
+- rb2-wifi-dual-loss-return.service
+- rb2-wlan0-powersave-off.service
+
+### Services disabled et inactive
+
+Les services suivants sont présents mais désactivés et inactifs :
+
+- rb2-lidar-ros.service
+- rb2-slam.service
+- rb2-web-teleop.service
+
+Remarque :
+
+- rb2-slam.service peut être désactivé volontairement si le SLAM est lancé manuellement au besoin;
+- rb2-lidar-ros.service semble possiblement doublon de rb2-bringup.service;
+- rb2-web-teleop.service semble possiblement ancien ou secondaire.
+
+## Scripts de production récupérés depuis le Pi5
+
+Les scripts suivants existaient sur le Pi5 et ont été ajoutés au dépôt.
+
+### /home/rj/rb2_scripts/start_rb2_bringup.sh
+
+Copie dans le dépôt :
+
+- home-rj/rb2_scripts/start_rb2_bringup.sh
+
+SHA256 :
+
+- 6802c294c4439ea1b02d207b428fe6dfb77364285cbc2d7fd7038c9fa24fdd56
+
+Statut :
+
+- utilisé par rb2-bringup.service;
+- critique pour le démarrage ROS 2.
+
+### /home/rj/rb2_scripts/start_rb2_slam.sh
+
+Copie dans le dépôt :
+
+- home-rj/rb2_scripts/start_rb2_slam.sh
+
+SHA256 :
+
+- 905d0c359a970c80e937268bd31c119c1d0e09cfb63accdec20d848b8d54ce89
+
+Statut :
+
+- utilisé par rb2-slam.service;
+- service désactivé actuellement;
+- utile pour SLAM manuel.
+
+### /home/rj/rb2_web/start_rb2_web_teleop.sh
+
+Copie dans le dépôt :
+
+- home-rj/rb2_web/start_rb2_web_teleop.sh
+
+SHA256 :
+
+- f4a53bc9abfce013112544cf8ba561332c3e53ba68f3eaaea826a61671bce071
+
+Statut :
+
+- utilisé par rb2-web-teleop.service;
+- service désactivé actuellement;
+- possiblement ancien ou secondaire.
+
+### /opt/rb2/rb2_imu_json.py
+
+Copie dans le dépôt :
+
+- opt/rb2/rb2_imu_json.py
+
+SHA256 :
+
+- a6b6659f725f64e154cfea2d565e73f16315cf825fa3849d4f1b1500da79402e
+
+Statut :
+
+- utilisé par rb2-imu-json.service;
+- service enabled et active;
+- important pour l'état IMU.
+
+### /opt/rb2/rb2_usb_camera.py
+
+Copie dans le dépôt :
+
+- opt/rb2/rb2_usb_camera.py
+
+SHA256 :
+
+- c902a3281c673c34620f840115100d9e8daf3309cf4aa70e7f0cf04630f1f375
+
+Statut :
+
+- utilisé par rb2-usb-camera.service;
+- service enabled et active;
+- important ou à clarifier selon l'usage caméra actuel.
+
+## Conclusion mise à jour
+
+Le dépôt est maintenant mieux aligné avec le Pi5 de production.
+
+Les services actifs qui pointaient vers des scripts absents du dépôt ont maintenant leurs scripts correspondants versionnés.
+
+Avant toute suppression future de services systemd, il faudra vérifier :
+
+- si le service est enabled ou disabled;
+- si le service est active ou inactive;
+- si le script correspondant est encore utilisé;
+- si une autre fonction du panneau RB2 dépend indirectement de ce service.
+
+Aucune suppression de service ne doit être faite sans test réel sur RB2.
