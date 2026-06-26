@@ -1,23 +1,41 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Fichiers temporaires et éditeurs
 *.log
+*.bak
 *.bak*
 *.tmp
+*.swp
+*.swo
+*~
 .DS_Store
+Thumbs.db
+Desktop.ini
 
-# fichiers temporaires RB2
+# Fichiers temporaires RB2
 tmp/
-*.json
+esp32_panel.py.bak-*
 
-# archives et grosses sauvegardes
+# JSON runtime RB2 à ne pas versionner
+rb2_lidar.json
+rb2_lidar_map.json
+rb2_wheel_ticks.json
+rb2_wifi_return.json
+rb2_last_map_png.txt
+
+# Archives et grosses sauvegardes
 *.tar.gz
 *.zip
 
-# secrets éventuels
+# Secrets éventuels
 .env
 *.key
 *.pem
 id_rsa*
-*.bak
-esp32_panel.py.bak-*
