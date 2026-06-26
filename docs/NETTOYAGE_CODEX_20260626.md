@@ -94,3 +94,46 @@ Puis seulement si tout est clair :
 ## Note
 
 Ce document est volontairement conservateur. RB2 fonctionne; le but du nettoyage est d'améliorer la lisibilité et la maintenance sans casser le comportement validé.
+
+## Comparaison SHA256 des dossiers opt
+
+Date : 2026-06-26
+
+Comparaison effectuée sur le dépôt local Windows dans la branche nettoyage-codex-20260626.
+
+### Résultat
+
+Les fichiers suivants sont identiques bit pour bit entre leurs copies respectives :
+
+- esp32_panel.py
+  - opt/rb2
+  - opt-rb2
+  - opt_rb2
+  - SHA256 : 96D5728657CDE388D44338B0C9F1343C85C13208CAD7676726A0D44F1D3CCECD
+
+- rb2_lidar_json.py
+  - opt/rb2
+  - opt-rb2
+  - SHA256 : 21F8A21CCDC5A32669A18E548FB0249DF23748860D8D463A7AC79188F4C7FFA3
+
+- rb2_wifi_dual_loss_return.py
+  - opt/rb2
+  - opt-rb2
+  - SHA256 : DBF6FCC542C953F39587F364ED25C0207069464C621A96BA7970F045CB342E3E
+
+### Fichier unique
+
+Le fichier suivant est présent seulement dans opt-rb2 :
+
+- rb2_lidar_map_json.py
+  - SHA256 : 619BC93F4A46877A5A4860F144D8D948E1C76C31875EE31B75FC239949E7041C
+
+### Conclusion provisoire
+
+opt/rb2 semble être le dossier canonique de production, car les services systemd pointent normalement vers /opt/rb2.
+
+Cependant, le dépôt contient une incohérence : rb2_lidar_map_json.py est absent de opt/rb2, mais présent dans opt-rb2.
+
+Avant toute suppression de dossier, il faut vérifier sur le Pi5 si /opt/rb2/rb2_lidar_map_json.py existe réellement en production.
+
+Aucun dossier ne doit être supprimé avant cette vérification.
