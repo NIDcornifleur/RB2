@@ -1782,6 +1782,55 @@ HTML = """
     }
 
 
+
+.rb2-trace-secours-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #b00000;
+  color: #ffffff !important;
+  border: 2px solid #ffffff;
+  border-radius: 6px;
+  padding: 7px 12px;
+  margin-left: 8px;
+  font-weight: bold;
+  font-size: 14px;
+  text-decoration: none;
+  box-shadow: 0 0 6px rgba(0,0,0,0.6);
+}
+.rb2-trace-secours-btn:hover {
+  background: #ff0000;
+}
+
+
+/* RB2_HIDE_TOP_RETOUR_CSS_20260702
+   Cache seulement le RETOUR AVANT placé dans la zone du haut.
+   Le RETOUR du panneau TRACE reste visible. */
+.rb2-top-button-group .rb2-return-forward-wrap,
+.rb2-terrain-top-buttons .rb2-return-forward-wrap,
+.terrain-top-buttons .rb2-return-forward-wrap,
+.terrain-topbar-actions .rb2-return-forward-wrap,
+.top-button-group .rb2-return-forward-wrap,
+.rb2-camera-info-bar .rb2-return-forward-wrap,
+.rb2-return-forward-wrap.floating {
+  display: none !important;
+}
+
+#rb2TracePanel .rb2-return-forward-wrap {
+  display: inline-flex !important;
+}
+
+
+/* RB2_HIDE_RETURN_FORWARD_TOP_ONLY_20260702
+   Cache le vrai bouton RETOUR AVANT du haut.
+   Le bouton RETOUR du bloc TRACE reste disponible séparément. */
+#rb2-return-forward-wrap {
+  display: none !important;
+}
+#rb2TraceReturnBtn {
+  display: inline-flex !important;
+}
+
 </style>
 
 <style>
@@ -2611,7 +2660,7 @@ setTimeout(rb2AddShutdownButtonFixedSimple, 1500);
       const row = document.createElement("div");
       row.id = "rb2ExtraButtonsRow";
       row.style.display = "grid";
-      row.style.gridTemplateColumns = "1.4fr 0.8fr 0.9fr";
+      row.style.gridTemplateColumns = "1.25fr 0.75fr 0.85fr 0.95fr";
       row.style.gap = "8px";
       row.style.marginTop = "8px";
       row.style.width = "100%";
@@ -2656,8 +2705,63 @@ setTimeout(rb2AddShutdownButtonFixedSimple, 1500);
         window.open("/zero_cam_stream.mjpg", "_blank");
       };
 
+      const secoursBtn = document.createElement("button");
+      secoursBtn.id = "rb2SecoursBtnNearShutdown";
+      secoursBtn.type = "button";
+      secoursBtn.textContent = "SECOURS";
+      secoursBtn.title = "Ouvrir la page de récupération directe ESP32";
+      secoursBtn.style.minHeight = "42px";
+      secoursBtn.style.fontWeight = "900";
+      secoursBtn.style.fontSize = "14px";
+      secoursBtn.style.background = "#b00000";
+      secoursBtn.style.color = "white";
+      secoursBtn.style.border = "2px solid #ffffff";
+      secoursBtn.style.borderRadius = "8px";
+      secoursBtn.style.cursor = "pointer";
+      secoursBtn.onclick = function () {
+        window.location.href = "/secours";
+      };
+
       row.appendChild(lidarBtn);
       row.appendChild(camBtn);
+
+      // RB2: remplacer le RETOUR du haut par SECOURS.
+      // Ne touche pas au RETOUR du panneau TRACE.
+      try {
+        const tracePanel = document.getElementById("rb2TracePanel");
+        const allTopCandidates = Array.from(document.querySelectorAll("button, a, input"));
+
+        for (const el of allTopCandidates) {
+          if (tracePanel && tracePanel.contains(el)) continue;
+
+          const txt = (el.innerText || el.value || el.textContent || "").trim().toUpperCase();
+
+          if (txt === "RETOUR" || txt === "RETOUR WIFI") {
+            el.textContent = "SECOURS";
+            el.innerText = "SECOURS";
+            if ("value" in el) el.value = "SECOURS";
+
+            el.title = "Ouvrir la page SECOURS directe ESP32";
+            el.onclick = function(ev) {
+              if (ev) ev.preventDefault();
+              window.location.href = "/secours";
+              return false;
+            };
+
+            el.style.background = "#b00000";
+            el.style.color = "white";
+            el.style.border = "2px solid #ffffff";
+            el.style.fontWeight = "900";
+            el.style.borderRadius = "8px";
+            el.style.cursor = "pointer";
+            break;
+          }
+        }
+      } catch (e) {
+        console.log("RB2: correction RETOUR haut -> SECOURS impossible:", e);
+      }
+
+      row.appendChild(secoursBtn);
     } catch (e) {
       console.log("Erreur ajout boutons RB2:", e);
     }
@@ -2666,6 +2770,112 @@ setTimeout(rb2AddShutdownButtonFixedSimple, 1500);
   window.addEventListener("load", rb2AddExtraButtonsNearShutdown);
   document.addEventListener("DOMContentLoaded", rb2AddExtraButtonsNearShutdown);
   setTimeout(rb2AddExtraButtonsNearShutdown, 1000);
+})();
+</script>
+
+<script>
+// RB2_LAYOUT_SECOURS_RETOUR_FINAL_20260702
+(function () {
+  function rb2LayoutSecoursRetourFinal() {
+    try {
+      if (!location.pathname.includes("/terrain")) return;
+
+      const tracePanel = document.getElementById("rb2TracePanel");
+
+      // 1. Déplacer le vrai RETOUR AVANT dans le panneau TRACE.
+      const returnWrap = document.querySelector(".rb2-return-forward-wrap");
+      if (tracePanel && returnWrap && !tracePanel.contains(returnWrap)) {
+        tracePanel.appendChild(returnWrap);
+      }
+
+      // 2. Supprimer le faux RETOUR ajouté dans TRACE, si présent.
+      const fakeReturn = document.getElementById("rb2TraceReturnBtn");
+      const realReturn = document.getElementById("rb2-return-forward-btn");
+      if (fakeReturn && realReturn) {
+        fakeReturn.remove();
+      }
+
+      // 3. Supprimer le vieux faux SECOURS placé dans l'ancien bloc trace.
+      const oldSecours = document.querySelector(".rb2-trace-secours-btn");
+      if (oldSecours) {
+        oldSecours.remove();
+      }
+
+      // 4. Ajouter SECOURS dans la rangée du haut, après CAMÉRA.
+      if (!document.getElementById("rb2SecoursTopBtn")) {
+        let host = document.getElementById("rb2ExtraButtonsRow");
+
+        if (!host) {
+          const camCandidates = Array.from(document.querySelectorAll("button"));
+          const camBtn = camCandidates.find(b => {
+            const t = (b.textContent || b.innerText || "").trim().toUpperCase();
+            return t === "CAMÉRA" || t === "CAMERA";
+          });
+          host = camBtn ? camBtn.parentElement : null;
+        }
+
+        if (host) {
+          try {
+            host.style.gridTemplateColumns = "1.25fr 0.75fr 0.85fr 0.95fr";
+          } catch (e) {}
+
+          const b = document.createElement("button");
+          b.id = "rb2SecoursTopBtn";
+          b.type = "button";
+          b.textContent = "SECOURS";
+          b.title = "Ouvrir la page SECOURS directe ESP32";
+          b.style.minHeight = "42px";
+          b.style.fontWeight = "900";
+          b.style.fontSize = "14px";
+          b.style.background = "#b00000";
+          b.style.color = "white";
+          b.style.border = "2px solid #ffffff";
+          b.style.borderRadius = "8px";
+          b.style.cursor = "pointer";
+          b.onclick = function () {
+            window.location.href = "/secours";
+          };
+          host.appendChild(b);
+        }
+      }
+
+    } catch (e) {
+      console.log("RB2 layout secours/retour final erreur:", e);
+    }
+  }
+
+  window.addEventListener("load", rb2LayoutSecoursRetourFinal);
+  document.addEventListener("DOMContentLoaded", rb2LayoutSecoursRetourFinal);
+  setTimeout(rb2LayoutSecoursRetourFinal, 300);
+  setTimeout(rb2LayoutSecoursRetourFinal, 1000);
+  setTimeout(rb2LayoutSecoursRetourFinal, 2500);
+})();
+</script>
+
+<script>
+// RB2_HIDE_TOP_RETOUR_20260702
+(function () {
+  function rb2HideTopRetourOnly() {
+    try {
+      const tracePanel = document.getElementById("rb2TracePanel");
+      const wraps = Array.from(document.querySelectorAll(".rb2-return-forward-wrap"));
+
+      for (const w of wraps) {
+        if (tracePanel && tracePanel.contains(w)) {
+          continue; // garder RETOUR dans TRACE
+        }
+        w.style.display = "none";
+      }
+    } catch (e) {
+      console.log("RB2 hide top retour erreur:", e);
+    }
+  }
+
+  window.addEventListener("load", rb2HideTopRetourOnly);
+  document.addEventListener("DOMContentLoaded", rb2HideTopRetourOnly);
+  setTimeout(rb2HideTopRetourOnly, 300);
+  setTimeout(rb2HideTopRetourOnly, 1000);
+  setTimeout(rb2HideTopRetourOnly, 2500);
 })();
 </script>
 
@@ -3140,6 +3350,314 @@ def encoders():
 def stop():
     result = esp32.stop()
     return jsonify(result)
+
+
+
+
+@app.route("/cmd_rescue", methods=["POST"])
+def cmd_rescue():
+    """
+    Mode secours temporaire RB2.
+    Sert seulement à récupérer le robot quand la sécurité LIDAR arrière
+    bloque les commandes normales. Impulsions lentes, courtes, avec STOP automatique.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        action = str(data.get("action", "STOP")).upper()
+        duration_ms = int(data.get("duration_ms", 220))
+
+        if duration_ms < 50:
+            duration_ms = 50
+        if duration_ms > 350:
+            duration_ms = 350
+
+        allowed = {
+            "STOP": "d0,0",
+            "BACK": "d-10,-10",
+            "LEFT": "d-8,8",
+            "RIGHT": "d8,-8",
+        }
+
+        if action not in allowed:
+            return {
+                "ok": False,
+                "error": "action non permise",
+                "allowed": list(allowed.keys()),
+            }, 400
+
+        motor_cmd = allowed[action]
+
+        if action == "STOP":
+            r = esp32.send("d0,0", wait=0.0)
+            return {
+                "ok": True,
+                "rescue": True,
+                "action": action,
+                "motor_cmd": motor_cmd,
+                "result": r,
+            }
+
+        # Impulsion courte, puis STOP obligatoire.
+        r1 = esp32.send(motor_cmd, wait=0.0)
+        time.sleep(duration_ms / 1000.0)
+        r2 = esp32.send("d0,0", wait=0.0)
+
+        return {
+            "ok": True,
+            "rescue": True,
+            "action": action,
+            "motor_cmd": motor_cmd,
+            "duration_ms": duration_ms,
+            "start_result": r1,
+            "stop_result": r2,
+            "warning": "Mode secours temporaire: contourne la sécurité LIDAR arrière pour récupération lente seulement.",
+        }
+
+    except Exception as e:
+        try:
+            esp32.send("d0,0", wait=0.0)
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "rescue": True,
+            "error": str(e),
+        }, 500
+
+
+
+# ============================================================
+# RB2 - MODE SECOURS PERMANENT
+# Page minimale de récupération: caméra + commandes ESP32.
+# Contourne /cmd, drive_seq, timestamp et sécurité LIDAR arrière.
+# ============================================================
+
+import threading as _rb2_secours_threading
+
+_RB2_SECOURS_LOCK = _rb2_secours_threading.Lock()
+_RB2_SECOURS_STOP_EVENT = None
+_RB2_SECOURS_THREAD = None
+_RB2_SECOURS_STATE = {
+    "running": False,
+    "action": "STOP",
+    "cmd": "d0,0",
+    "speed": 0,
+    "duration_s": 0,
+    "last_error": None,
+}
+
+def _rb2_secours_stop_burst():
+    for _ in range(15):
+        try:
+            esp32.send("d0,0", wait=0.0)
+        except Exception as e:
+            _RB2_SECOURS_STATE["last_error"] = str(e)
+        time.sleep(0.04)
+
+def _rb2_secours_worker(action, cmd, speed, duration_s, stop_event):
+    try:
+        with _RB2_SECOURS_LOCK:
+            _RB2_SECOURS_STATE.update({
+                "running": True,
+                "action": action,
+                "cmd": cmd,
+                "speed": speed,
+                "duration_s": duration_s,
+                "last_error": None,
+            })
+
+        end = time.time() + duration_s
+        while time.time() < end and not stop_event.is_set():
+            esp32.send(cmd, wait=0.0)
+            time.sleep(0.10)
+
+    except Exception as e:
+        with _RB2_SECOURS_LOCK:
+            _RB2_SECOURS_STATE["last_error"] = str(e)
+
+    finally:
+        _rb2_secours_stop_burst()
+        with _RB2_SECOURS_LOCK:
+            _RB2_SECOURS_STATE["running"] = False
+            _RB2_SECOURS_STATE["action"] = "STOP"
+            _RB2_SECOURS_STATE["cmd"] = "d0,0"
+
+@app.route("/secours")
+def rb2_secours_page():
+    return """
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>RB2 SECOURS</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { margin:0; background:#111; color:white; font-family:Arial,sans-serif; }
+h1 { margin:0; padding:12px; background:#8b0000; text-align:center; }
+.wrap { display:grid; grid-template-columns:1fr 340px; gap:10px; padding:10px; }
+.cam { background:#000; text-align:center; border:2px solid #555; }
+.cam img { max-width:100%; max-height:80vh; }
+.panel { background:#222; padding:12px; border:2px solid #555; }
+button { width:100%; padding:18px; margin:6px 0; font-size:24px; font-weight:bold; border:0; border-radius:8px; }
+.stop { background:#b00000; color:white; font-size:30px; }
+.fwd { background:#207020; color:white; }
+.back { background:#205090; color:white; }
+.turn { background:#666; color:white; }
+input { width:100%; font-size:22px; padding:8px; box-sizing:border-box; margin-bottom:10px; }
+pre { background:#000; color:#0f0; padding:8px; min-height:90px; white-space:pre-wrap; }
+a { color:white; }
+@media(max-width:900px){ .wrap{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<h1>RB2 — SECOURS</h1>
+<div class="wrap">
+  <div class="cam">
+    <img src="/zero_cam_stream.mjpg" alt="Caméra RB2">
+  </div>
+  <div class="panel">
+    <button class="stop" onclick="secours('stop')">STOP</button>
+
+    <label>Vitesse %</label>
+    <input id="speed" type="number" value="50" min="10" max="85">
+
+    <label>Durée secondes</label>
+    <input id="duration" type="number" value="5" min="0.2" max="45" step="0.1">
+
+    <button class="fwd" onclick="secours('forward')">AVANCE</button>
+    <button class="back" onclick="secours('back')">RECUL</button>
+    <button class="turn" onclick="secours('left')">GAUCHE</button>
+    <button class="turn" onclick="secours('right')">DROITE</button>
+
+    <pre id="status">Prêt.</pre>
+    <p><a href="/terrain">Retour /terrain</a></p>
+  </div>
+</div>
+
+<script>
+async function secours(action) {
+  const speed = Number(document.getElementById("speed").value || 50);
+  const duration_s = Number(document.getElementById("duration").value || 5);
+  const st = document.getElementById("status");
+  st.textContent = "Commande: " + action;
+
+  try {
+    const r = await fetch("/secours_cmd", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action, speed, duration_s})
+    });
+    const j = await r.json();
+    st.textContent = JSON.stringify(j, null, 2);
+  } catch(e) {
+    st.textContent = "ERREUR: " + e;
+  }
+}
+
+async function statusLoop() {
+  try {
+    const r = await fetch("/secours_status");
+    const j = await r.json();
+    document.getElementById("status").textContent = JSON.stringify(j, null, 2);
+  } catch(e) {}
+}
+setInterval(statusLoop, 2000);
+</script>
+</body>
+</html>
+"""
+
+@app.route("/secours_status")
+def rb2_secours_status():
+    with _RB2_SECOURS_LOCK:
+        d = dict(_RB2_SECOURS_STATE)
+    d["ok"] = True
+    d["rescue"] = True
+    return d
+
+@app.route("/secours_cmd", methods=["POST"])
+def rb2_secours_cmd():
+    global _RB2_SECOURS_STOP_EVENT, _RB2_SECOURS_THREAD
+
+    data = request.get_json(silent=True) or {}
+    action = str(data.get("action", "stop")).lower().strip()
+
+    try:
+        speed = int(float(data.get("speed", 50)))
+    except Exception:
+        speed = 50
+
+    try:
+        duration_s = float(data.get("duration_s", 5))
+    except Exception:
+        duration_s = 5.0
+
+    speed = max(10, min(85, speed))
+    duration_s = max(0.2, min(45.0, duration_s))
+
+    if action == "stop":
+        try:
+            if _RB2_SECOURS_STOP_EVENT is not None:
+                _RB2_SECOURS_STOP_EVENT.set()
+        except Exception:
+            pass
+
+        _rb2_secours_stop_burst()
+
+        with _RB2_SECOURS_LOCK:
+            _RB2_SECOURS_STATE.update({
+                "running": False,
+                "action": "STOP",
+                "cmd": "d0,0",
+                "speed": 0,
+                "duration_s": 0,
+            })
+
+        return {"ok": True, "rescue": True, "action": "STOP", "cmd": "d0,0"}
+
+    if action == "forward":
+        cmd = f"d{speed},{speed}"
+    elif action == "back":
+        cmd = f"d-{speed},-{speed}"
+    elif action == "left":
+        cmd = f"d-{speed},{speed}"
+    elif action == "right":
+        cmd = f"d{speed},-{speed}"
+    else:
+        return {"ok": False, "error": "action inconnue"}, 400
+
+    try:
+        if _RB2_SECOURS_STOP_EVENT is not None:
+            _RB2_SECOURS_STOP_EVENT.set()
+            time.sleep(0.15)
+    except Exception:
+        pass
+
+    stop_event = _rb2_secours_threading.Event()
+    t = _rb2_secours_threading.Thread(
+        target=_rb2_secours_worker,
+        args=(action, cmd, speed, duration_s, stop_event),
+        daemon=True,
+    )
+
+    _RB2_SECOURS_STOP_EVENT = stop_event
+    _RB2_SECOURS_THREAD = t
+    t.start()
+
+    return {
+        "ok": True,
+        "rescue": True,
+        "action": action,
+        "cmd": cmd,
+        "speed": speed,
+        "duration_s": duration_s,
+        "note": "Commande secours lancée avec STOP automatique.",
+    }
+
+# ============================================================
+# FIN RB2 - MODE SECOURS PERMANENT
+# ============================================================
+
 
 
 @app.route("/drive_safety_status")
@@ -4939,12 +5457,12 @@ TERRAIN_HTML = """
                   style="padding:3px 8px;height:23px;min-width:58px;border-radius:7px;border:1px solid #065f46;background:#047857;color:#fff;font-size:10px;font-weight:900;cursor:pointer;">
             CAMÉRA
           </button>
-          <button id="rb2RetourWifiBtn"
+          <button id="rb2SecoursTopBtn"
                   type="button"
-                  onclick="rb2RetourWifiAckFinal(); return false;"
-                  title="Retour WiFi automatique : bleu = prêt, rouge = retour effectué/en cours"
-                  style="position:relative;z-index:999999;pointer-events:auto;padding:3px 8px;height:23px;min-width:72px;border-radius:7px;border:1px solid #38bdf8;background:#0f2a3a;color:#bdefff;font-size:10px;font-weight:900;cursor:pointer;">
-            Retour WiFi
+                  onclick="window.location.href='/secours'; return false;"
+                  title="Ouvrir la page SECOURS directe ESP32"
+                  style="position:relative;z-index:999999;pointer-events:auto;padding:3px 8px;height:23px;min-width:72px;border-radius:7px;border:1px solid #ffffff;background:#b00000;color:#ffffff;font-size:10px;font-weight:900;cursor:pointer;">
+            SECOURS
           </button>
           
         </span>
@@ -4970,6 +5488,7 @@ TERRAIN_HTML = """
           <button class="trace-start-btn" onclick="traceStart()">ENREGISTRER TRACE</button>
           <button class="trace-stop-btn" onclick="traceStop()" disabled>ENREG. ARRÊTÉ</button>
           <button class="trace-marker-btn" onclick="traceMark()">MARQUER</button>
+<a class="rb2-trace-secours-btn" href="/secours">SECOURS</a>
           <button class="photo-marker-btn" onclick="photoMark()">PHOTO REPÈRE</button>
         </div>
         <div id="traceIndicator" class="terrain-action-status">Enregistrement trace : vérification...</div>
@@ -9188,10 +9707,63 @@ RB2_SLAM_PANEL_HTML = """
   <button id="rb2TraceFollowBtn" class="rb2SlamBtn" onclick="rb2TraceFollowPlaceholder()">SUIVRE TRACE</button>
   <button id="rb2TracePhotoMarkBtn" class="rb2SlamBtn" onclick="rb2TracePhotoMarkCompact()">REP. PHOTO</button>
   <button id="rb2TraceMarkBtn" class="rb2SlamBtn" onclick="rb2TraceMarkCompact()">MARQUER</button>
+  <button id="rb2TraceReturnBtn" class="rb2SlamBtn" onclick="rb2TraceReturnStartCompact()">RETOUR</button>
 </div>
 
 
 <script>
+
+async function rb2TraceReturnStartCompact() {
+  const b = document.getElementById("rb2TraceReturnBtn");
+
+  if (!confirm("Confirmer RETOUR TRACE ?\n\nRB2 va tenter de revenir sur ses pas avec la dernière trace enregistrée.")) {
+    return;
+  }
+
+  try {
+    if (b) {
+      b.disabled = true;
+      b.textContent = "RETOUR...";
+      b.style.background = "#b91c1c";
+      b.style.color = "white";
+    }
+
+    const res = await fetch("/trace_return_start", {
+      method: "POST",
+      cache: "no-store"
+    });
+
+    const j = await res.json();
+
+    if (j && j.ok) {
+      if (b) {
+        b.textContent = "RETOUR ACTIF";
+        b.title = "Retour trace lancé";
+      }
+    } else {
+      if (b) {
+        b.textContent = "RET. ERREUR";
+        b.title = (j && (j.error || j.message)) ? (j.error || j.message) : "Erreur retour trace";
+      }
+      alert("RETOUR TRACE refusé : " + ((j && (j.error || j.message)) ? (j.error || j.message) : "erreur inconnue"));
+    }
+  } catch (e) {
+    if (b) {
+      b.textContent = "RET. ERREUR";
+      b.title = "Erreur retour trace : " + e;
+    }
+    alert("Erreur RETOUR TRACE : " + e);
+  } finally {
+    setTimeout(() => {
+      const bb = document.getElementById("rb2TraceReturnBtn");
+      if (bb) {
+        bb.disabled = false;
+        bb.textContent = "RETOUR";
+      }
+    }, 2500);
+  }
+}
+
 function rb2RemoveOldShutdownButtons() {
   ["rb2ShutdownAllBtnFixed", "rb2ShutdownAllTerrainBtn", "rb2ShutdownAllDirectBtn", "rb2ShutdownAllBtn"].forEach(id => {
     const el = document.getElementById(id);
@@ -11082,6 +11654,90 @@ def rb2_lidar_map_status_with_clearance():
 
 app.view_functions["lidar_map_status"] = rb2_lidar_map_status_with_clearance
 # RB2_LIDAR_MAP_CLEARANCE_OVERRIDE_END
+
+
+
+
+
+
+
+# ============================================================
+# RB2_HIDE_TOP_RETOUR_AFTER_REQUEST_CSS_20260702
+# Injecte dans /terrain un CSS qui cache le RETOUR AVANT du haut.
+# Conserve SECOURS et conserve le RETOUR du panneau TRACE s'il existe.
+# ============================================================
+
+@app.after_request
+def rb2_hide_top_retour_after_request_css_20260702(response):
+    try:
+        if request.path != "/terrain":
+            return response
+
+        if "text/html" not in response.headers.get("Content-Type", ""):
+            return response
+
+        html = response.get_data(as_text=True)
+
+        if "RB2_HIDE_TOP_RETOUR_AFTER_REQUEST_CSS_20260702_STYLE" not in html:
+            css = """
+<style id="RB2_HIDE_TOP_RETOUR_AFTER_REQUEST_CSS_20260702_STYLE">
+/* Cache le RETOUR AVANT généré en haut */
+#rb2-return-forward-wrap {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  max-width: 0 !important;
+  max-height: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Garde visible le bouton RETOUR déjà placé dans TRACE */
+#rb2TraceReturnBtn {
+  display: inline-flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* Si le vrai RETOUR AVANT est éventuellement déplacé dans TRACE, il redevient visible */
+#rb2TracePanel #rb2-return-forward-wrap {
+  display: inline-flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  width: auto !important;
+  height: auto !important;
+  max-width: none !important;
+  max-height: none !important;
+  overflow: visible !important;
+  pointer-events: auto !important;
+}
+</style>
+"""
+            if "</head>" in html:
+                html = html.replace("</head>", css + "\n</head>", 1)
+            elif "</body>" in html:
+                html = html.replace("</body>", css + "\n</body>", 1)
+            else:
+                html = css + html
+
+            response.set_data(html)
+            response.headers["Content-Length"] = str(len(response.get_data()))
+
+    except Exception as e:
+        try:
+            print("RB2_HIDE_TOP_RETOUR_AFTER_REQUEST_CSS erreur:", e)
+        except Exception:
+            pass
+
+    return response
+
+# ============================================================
+# FIN RB2_HIDE_TOP_RETOUR_AFTER_REQUEST_CSS_20260702
+# ============================================================
+
 
 
 if __name__ == "__main__":
