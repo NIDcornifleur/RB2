@@ -7595,9 +7595,66 @@ input { width:100%; font-size:22px; padding:8px; box-sizing:border-box; margin-b
 pre { background:#000; color:#0f0; padding:8px; min-height:90px; white-space:pre-wrap; }
 a { color:white; }
 @media(max-width:900px){ .wrap{grid-template-columns:1fr;} }
+
+    /* === SECOURS : titre compact avec retour terrain === */
+    .secours-title-row {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 14px !important;
+      margin: 0 0 4px 0 !important;
+      padding: 0 !important;
+      line-height: 1 !important;
+      background: #050505 !important;
+      min-height: 28px !important;
+    }
+
+    .secours-title-text {
+      color: #fff !important;
+      font-size: 22px !important;
+      font-weight: 900 !important;
+      line-height: 1 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      white-space: nowrap !important;
+    }
+
+    .secours-retour-terrain {
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      background: #1f2937 !important;
+      border: 1px solid #60a5fa !important;
+      color: #fff !important;
+      font-weight: 800 !important;
+      text-decoration: none !important;
+      padding: 5px 10px !important;
+      border-radius: 7px !important;
+      font-size: 13px !important;
+      line-height: 1 !important;
+      min-height: 24px !important;
+      box-sizing: border-box !important;
+      white-space: nowrap !important;
+    }
+
+    .secours-retour-terrain:hover {
+      background: #2563eb !important;
+      border-color: #93c5fd !important;
+    }
+    /* === FIN SECOURS titre compact avec retour terrain === */
 </style>
 </head>
 <body>
+
+    <div class="secours-title-row">
+      <div class="secours-title-text">RB2 - SECOURS</div>
+      <a class="secours-retour-terrain" href="/terrain">Retour /terrain</a>
+    </div>
+
+<a class="secours-retour-terrain" href="/terrain">Retour /terrain</a>
+    </div>
+ </div>
+
 <h1>RB2 — SECOURS</h1>
 <div class="wrap">
   <div class="cam">
@@ -7618,7 +7675,7 @@ a { color:white; }
     <button class="turn" onclick="secours('right')">DROITE</button>
 
     <pre id="status">Prêt.</pre>
-    <p><a href="/terrain">Retour /terrain</a></p>
+    <p></p>
   </div>
 </div>
 
@@ -7650,6 +7707,71 @@ async function statusLoop() {
   } catch(e) {}
 }
 setInterval(statusLoop, 2000);
+</script>
+
+<script id="secours-clean-title-script">
+(function() {
+  function isTerrainReturn(el) {
+    const txt = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const href = (el.getAttribute("href") || "").trim();
+    const onclick = (el.getAttribute("onclick") || "").trim();
+    return (
+      txt.includes("retour") &&
+      txt.includes("terrain") &&
+      (href === "/terrain" || onclick.includes("terrain"))
+    );
+  }
+
+  function removeEmptyParent(el) {
+    let p = el.parentElement;
+    el.remove();
+
+    for (let i = 0; p && i < 3; i++) {
+      if (p.classList && p.classList.contains("secours-title-row")) return;
+
+      const txt = (p.textContent || "").replace(/\s+/g, " ").trim();
+      const hasUsefulChildren = p.querySelector("button,a,img,canvas,input,select,textarea");
+      const parent = p.parentElement;
+
+      if (!txt && !hasUsefulChildren) {
+        p.remove();
+        p = parent;
+      } else {
+        break;
+      }
+    }
+  }
+
+  function cleanSecoursTitlesAndReturns() {
+    // Garder une seule ligne noire.
+    document.querySelectorAll(".secours-title-row").forEach((el, idx) => {
+      if (idx > 0) el.remove();
+    });
+
+    // Supprimer les anciens titres rouges RB2 - SECOURS.
+    const titleRe = /^RB2\s*[-–—]\s*SECOURS$/i;
+    document.querySelectorAll("h1,h2,h3,h4,div,section,header").forEach(el => {
+      if (el.closest(".secours-title-row")) return;
+      const txt = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (titleRe.test(txt)) el.remove();
+    });
+
+    // Supprimer tous les Retour /terrain sauf celui dans la ligne noire.
+    document.querySelectorAll('a,button').forEach(el => {
+      if (el.closest(".secours-title-row")) return;
+      if (isTerrainReturn(el)) removeEmptyParent(el);
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", cleanSecoursTitlesAndReturns);
+  } else {
+    cleanSecoursTitlesAndReturns();
+  }
+
+  setTimeout(cleanSecoursTitlesAndReturns, 250);
+  setTimeout(cleanSecoursTitlesAndReturns, 1000);
+})();
 </script>
 </body>
 </html>
