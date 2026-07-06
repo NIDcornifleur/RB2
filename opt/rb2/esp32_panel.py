@@ -2879,6 +2879,212 @@ setTimeout(rb2AddShutdownButtonFixedSimple, 1500);
 })();
 </script>
 
+<script>
+const terrain2DriveToken = "terrain2-" + String(Date.now()) + "-" + String(Math.floor(Math.random() * 1000000));
+let terrain2DriveSeq = 0;
+let terrain2DriveServerOffsetMs = 0;
+let terrain2Driving = false;
+let terrain2CurrentDriveCmd = "d0,0";
+let terrain2CurrentDriveLabel = "arrêt";
+let terrain2DriveTimer = null;
+
+function terrain2Log(text) {
+  const log = document.getElementById("terrain2Log");
+  if (log) {
+    log.textContent = text;
+  }
+}
+
+function terrain2AppendLog(text) {
+  const log = document.getElementById("terrain2Log");
+  if (log) {
+    log.textContent += "\n" + text;
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+function terrain2UpdateDriveStatus() {
+  const el = document.getElementById("terrain2DriveStatus");
+  if (el) {
+    el.textContent = terrain2CurrentDriveLabel;
+  }
+}
+
+function terrain2ClearActiveButtons() {
+  document.querySelectorAll("#terrain2DrivePad .drive-btn").forEach(btn => {
+    btn.classList.remove("active");
+  });
+}
+
+function terrain2SetActiveButton(button) {
+  terrain2ClearActiveButtons();
+  if (button) {
+    button.classList.add("active");
+  }
+}
+
+async function terrain2SyncDriveServerTime() {
+  try {
+    const res = await fetch("/drive_time", {method: "GET", cache: "no-store"});
+    const j = await res.json();
+
+    if (j && j.ok && typeof j.server_ms === "number") {
+      terrain2DriveServerOffsetMs = j.server_ms - Date.now();
+      terrain2AppendLog("Synchro temps OK. Décalage serveur: " + terrain2DriveServerOffsetMs + " ms");
+      return true;
+    }
+
+    terrain2AppendLog("Synchro temps invalide.");
+    return false;
+  } catch (e) {
+    terrain2AppendLog("ERREUR synchro temps: " + e);
+    return false;
+  }
+}
+
+function terrain2BuildDrivePayload(command) {
+  const payload = {cmd: command};
+
+  // STOP pur : accepté volontairement sans séquence par /cmd.
+  if (command === "d0,0") {
+    return payload;
+  }
+
+  terrain2DriveSeq += 1;
+  payload.drive_seq = terrain2DriveSeq;
+  payload.drive_token = terrain2DriveToken;
+  payload.sent_server_ms = Math.round(Date.now() + terrain2DriveServerOffsetMs);
+  return payload;
+}
+
+async function terrain2Cmd(command, showLog = true) {
+  const payload = terrain2BuildDrivePayload(command);
+
+  if (showLog) {
+    terrain2Log("Commande envoyée : " + command);
+  }
+
+  try {
+    const res = await fetch("/cmd", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+      cache: "no-store"
+    });
+
+    const data = await res.json();
+
+    if (showLog) {
+      terrain2AppendLog(JSON.stringify(data, null, 2));
+    }
+
+    return data;
+  } catch (e) {
+    if (showLog) {
+      terrain2AppendLog("ERREUR: " + e);
+    }
+    return {"ok": false, "error": String(e)};
+  }
+}
+
+function terrain2StartDrive(button) {
+  if (!button) return;
+
+  if (terrain2DriveTimer) {
+    clearInterval(terrain2DriveTimer);
+    terrain2DriveTimer = null;
+  }
+
+  terrain2CurrentDriveCmd = button.dataset.drive || "d0,0";
+  terrain2CurrentDriveLabel = button.dataset.label || terrain2CurrentDriveCmd;
+  terrain2Driving = true;
+
+  terrain2UpdateDriveStatus();
+  terrain2SetActiveButton(button);
+
+  terrain2Cmd(terrain2CurrentDriveCmd, true);
+
+  terrain2DriveTimer = setInterval(() => {
+    if (terrain2Driving && terrain2CurrentDriveCmd !== "d0,0") {
+      terrain2Cmd(terrain2CurrentDriveCmd, false);
+    }
+  }, 350);
+}
+
+function terrain2StopDrive() {
+  terrain2Driving = false;
+  terrain2CurrentDriveCmd = "d0,0";
+  terrain2CurrentDriveLabel = "arrêt";
+
+  terrain2UpdateDriveStatus();
+  terrain2ClearActiveButtons();
+
+  if (terrain2DriveTimer) {
+    clearInterval(terrain2DriveTimer);
+    terrain2DriveTimer = null;
+  }
+
+  terrain2Cmd("d0,0", true);
+  setTimeout(() => terrain2Cmd("d0,0", false), 80);
+  setTimeout(() => terrain2Cmd("d0,0", false), 200);
+}
+
+function terrain2SetupDrivePad() {
+  const buttons = document.querySelectorAll("#terrain2DrivePad .drive-btn");
+
+  for (const b of buttons) {
+    b.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      try {
+        b.setPointerCapture(e.pointerId);
+      } catch (err) {}
+      terrain2StartDrive(b);
+    });
+
+    b.addEventListener("pointerup", e => {
+      e.preventDefault();
+      terrain2StopDrive();
+    });
+
+    b.addEventListener("pointercancel", e => {
+      e.preventDefault();
+      terrain2StopDrive();
+    });
+
+    b.addEventListener("lostpointercapture", e => {
+      terrain2StopDrive();
+    });
+
+    b.addEventListener("contextmenu", e => {
+      e.preventDefault();
+    });
+  }
+
+  window.addEventListener("blur", terrain2StopDrive);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      terrain2StopDrive();
+    }
+  });
+
+  window.addEventListener("offline", () => {
+    try { terrain2StopDrive(); } catch (e) {}
+  });
+
+  window.addEventListener("online", () => {
+    try {
+      terrain2StopDrive();
+      terrain2SyncDriveServerTime();
+    } catch (e) {}
+  });
+}
+
+terrain2UpdateDriveStatus();
+terrain2SetupDrivePad();
+terrain2SyncDriveServerTime();
+setInterval(terrain2SyncDriveServerTime, 30000);
+</script>
 </body>
 </html>
 """
@@ -3482,6 +3688,3888 @@ def _rb2_secours_worker(action, cmd, speed, duration_s, stop_event):
             _RB2_SECOURS_STATE["action"] = "STOP"
             _RB2_SECOURS_STATE["cmd"] = "d0,0"
 
+
+
+@app.route("/terrain2")
+def rb2_terrain2_page():
+    return """
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>RB2 Terrain2</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #101010;
+      color: #eee;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 9999;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      background: #181818;
+      border-bottom: 1px solid #333;
+    }
+
+    .top-title {
+      font-size: 13px;
+      color: #ddd;
+      margin-right: auto;
+      white-space: nowrap;
+    }
+
+    .top-title strong {
+      color: #fff;
+      font-size: 15px;
+    }
+
+    button, .linkbtn {
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #2b2b2b;
+      color: #fff;
+      padding: 8px 10px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+    }
+
+    button:hover, .linkbtn:hover { background: #3a3a3a; }
+
+    .danger {
+      background: #b00020 !important;
+      border-color: #ff405c !important;
+      color: #fff !important;
+    }
+
+    .blue {
+      background: #164c7a !important;
+      border-color: #3b82f6 !important;
+    }
+
+    .green {
+      background: #166534 !important;
+      border-color: #22c55e !important;
+    }
+
+    .purple {
+      background: #4b267a !important;
+      border-color: #a78bfa !important;
+    }
+
+    .orange {
+      background: #92400e !important;
+      border-color: #f59e0b !important;
+    }
+
+    .disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+
+    .page {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 280px;
+      gap: 6px;
+      padding: 7px;
+      align-items: start;
+    }
+
+    .media-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.12fr) minmax(300px, 0.88fr);
+      gap: 10px;
+      align-items: start;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 10px;
+      min-width: 0;
+    }
+
+
+    .media-card {
+      padding: 7px;
+    }
+
+    .media-card h2 {
+      margin-bottom: 6px;
+    }
+
+    .media-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.12fr) minmax(300px, 0.88fr);
+      gap: 6px;
+      align-items: stretch;
+    }
+
+    .media-panel {
+      min-width: 0;
+    }
+
+    .media-panel h3 {
+      margin: 0 0 6px 0;
+      font-size: 13px;
+      color: #ddd;
+      font-weight: 700;
+      letter-spacing: .03em;
+    }
+
+    .card h2 {
+      margin: 0 0 8px 0;
+      padding-bottom: 5px;
+      border-bottom: 1px solid #333;
+      font-size: 15px;
+      color: #fff;
+      letter-spacing: .03em;
+    }
+
+    .leftcol, .rightcol {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .rightcol {
+      max-width: 280px;
+      width: 280px;
+    }
+
+    .camera-box img {
+      width: 100%;
+      height: 400px;
+      max-height: 64vh;
+      object-fit: contain;
+      background: #000;
+      border: 1px solid #333;
+      border-radius: 6px;
+      display: block;
+    }
+
+    .lidar-wrap canvas {
+      display: block;
+    }
+
+    .lidar-wrap {
+      width: 100%;
+      background: #050505;
+      border: 1px solid #333;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    #lidarCanvas {
+      width: 100%;
+      height: 400px;
+      display: block;
+      background: #050505;
+    }
+
+
+    .camera-capture-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
+      margin-top: 7px;
+    }
+
+
+    .camera-capture-row button.photo-flash {
+      background: #166534 !important;
+      border-color: #22c55e !important;
+      color: #fff !important;
+      outline: 2px solid #86efac;
+    }
+
+    .camera-capture-row button.photo-error {
+      background: #7f1d1d !important;
+      border-color: #ef4444 !important;
+      color: #fff !important;
+      outline: 2px solid #fecaca;
+    }
+
+    .camera-capture-row button.video-active {
+      background: #b00020 !important;
+      border-color: #ff405c !important;
+      color: #fff !important;
+      outline: 2px solid #fecaca;
+    }
+
+    .camera-capture-row button {
+      min-height: 34px;
+      font-size: 13px;
+      padding: 6px 8px;
+    }
+.status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 7px;
+      font-size: 12px;
+    }
+
+    .pill {
+      border: 1px solid #444;
+      background: #202020;
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: #ddd;
+    }
+
+    .pill.ok { border-color: #22c55e; color: #bbf7d0; }
+    .pill.bad { border-color: #ef4444; color: #fecaca; }
+    .pill.warn { border-color: #f59e0b; color: #fde68a; }
+
+    .drive-status {
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .drive-status span {
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .drive-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 7px;
+      max-width: 260px;
+      margin: 0 auto 8px auto;
+    }
+
+    .drive-btn {
+      min-height: 48px;
+      font-size: 14px;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .drive-btn.active {
+      outline: 3px solid #fff;
+    }
+
+    .pan-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 7px;
+      max-width: 260px;
+      margin: 8px auto 0 auto;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+    }
+
+    .two-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
+    }
+
+    .capture-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+    }
+
+    .log {
+      margin-top: 8px;
+      padding: 7px;
+      min-height: 48px;
+      max-height: 100px;
+      overflow: auto;
+      background: #080808;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #ccc;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+
+    .note {
+      color: #aaa;
+      font-size: 12px;
+      line-height: 1.35;
+      margin-top: 6px;
+    }
+
+
+    .controls {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 7px;
+      width: 100%;
+      font-size: 12px;
+    }
+
+    .controls h2 {
+      margin: 0 0 4px 0;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #333;
+      font-size: 16px;
+      color: #fff;
+      text-align: center;
+    }
+
+    .terrain-signature {
+      text-align: center;
+      color: #aaa;
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+
+    .rb2-relay-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      margin-bottom: 6px;
+    }
+
+    .rb2-relay-btn {
+      min-height: 32px;
+      padding: 5px 6px;
+      font-size: 11px;
+      border-radius: 6px;
+    }
+
+    .rb2-relay-off {
+      background: #333;
+      border-color: #666;
+    }
+
+    .rb2-relay-on {
+      background: #166534;
+      border-color: #22c55e;
+    }
+
+    .rb2-status-light {
+      padding: 5px 6px;
+      margin-bottom: 6px;
+      border-radius: 6px;
+      border: 1px solid #444;
+      background: #202020;
+      color: #ddd;
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .drive-status-hidden {
+      display: none;
+    }
+
+    .controls .drive-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 5px;
+      max-width: 250px;
+      margin: 0 auto 7px auto;
+    }
+
+    .controls .drive-btn {
+      min-height: 42px;
+      padding: 5px;
+      font-size: 13px;
+      border-radius: 7px;
+    }
+
+    .controls .stop,
+    .controls .drive-btn.stop {
+      background: #b00020 !important;
+      border-color: #ff405c !important;
+      color: #fff !important;
+    }
+
+
+    .speed-row {
+      display: grid;
+      grid-template-columns: .9fr 1fr 1fr 1fr 1fr;
+      gap: 4px;
+      max-width: 250px;
+      margin: 4px auto 7px auto;
+      align-items: center;
+    }
+
+    .speed-label {
+      color: #ddd;
+      font-size: 11px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .speed-btn {
+      min-height: 28px;
+      padding: 3px 4px;
+      font-size: 11px;
+      border-radius: 6px;
+      background: #2b2b2b;
+      border: 1px solid #555;
+      color: #fff;
+    }
+
+    .speed-btn.speed-active {
+      background: #166534 !important;
+      border-color: #22c55e !important;
+      color: #fff !important;
+      outline: 2px solid #86efac;
+    }
+
+    .pt-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 5px;
+      max-width: 250px;
+      margin: 7px auto 6px auto;
+      align-items: center;
+    }
+
+    .pt-grid button {
+      min-height: 34px;
+      padding: 5px;
+      font-size: 14px;
+    }
+
+    .readout {
+      background: #101010;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 5px;
+      text-align: center;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .small-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 5px;
+      max-width: 250px;
+      margin: 6px auto;
+    }
+
+    .small-row button {
+      min-height: 30px;
+      padding: 4px;
+      font-size: 12px;
+    }
+
+    .data-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      margin-top: 6px;
+    }
+
+    .box {
+      background: #101010;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 5px;
+      text-align: center;
+    }
+
+    .box .label {
+      color: #aaa;
+      font-size: 10px;
+      margin-bottom: 2px;
+    }
+
+    .box .value {
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .small-text {
+      color: #aaa;
+      font-size: 11px;
+      line-height: 1.25;
+      margin-top: 5px;
+      text-align: center;
+    }
+.horizon-center-v,
+.horizon-center-h {
+      left: 0;
+      top: 50%;
+      width: 100%;
+      height: 1px;
+    }
+@media (max-width: 1100px) {
+      .page { grid-template-columns: 1fr; }
+
+      .rightcol {
+        max-width: none;
+        width: auto;
+      }
+
+      .media-row {
+        grid-template-columns: 1fr;
+      }
+
+      .camera-box img {
+        height: auto;
+        max-height: 46vh;
+      }
+
+      #lidarCanvas {
+        height: 400px;
+      }
+
+      .top-title { width: 100%; }
+    }
+  
+
+/* === TERRAIN2 : couleurs du bloc RB2 Terrain copiées de /terrain === */
+.controls {
+  background: #222;
+}
+
+.stop {
+  background: #a00000;
+}
+
+.stop:hover {
+  background: #d00000;
+}
+
+.drive-btn.active {
+  background: #0066aa !important;
+  border: 2px solid #66ccff !important;
+  box-shadow: 0 0 10px #66ccff !important;
+}
+
+.box {
+  background: #000;
+  border: 1px solid #333;
+}
+
+.label {
+  color: #bbb;
+}
+
+.value {
+  color: #00ff66;
+}
+
+.readout {
+  background: #000;
+  color: #00ff66;
+}
+
+.small-text {
+  color: #aaa;
+}
+.rb2-status-light {
+  background: #000;
+  border: 1px solid #333;
+  color: #aaa;
+}
+
+.rb2-relay-btn {
+  border: 1px solid #4b5563;
+}
+
+.rb2-relay-off {
+  background: #374151;
+  color: #e5e7eb;
+}
+
+.rb2-relay-on {
+  background: #facc15;
+  color: #111827;
+  border-color: #f59e0b;
+}
+
+.rb2-relay-error {
+  background: #7f1d1d;
+  color: #fee2e2;
+  border-color: #ef4444;
+}
+
+/* Couleurs boutons Lumières / Relais 2 */ .rb2-relay-btn.rb2-relay-off {
+  background: #374151;
+  color: #e5e7eb;
+  border-color: #4b5563;
+}
+
+.rb2-relay-btn.rb2-relay-on {
+  background: #facc15;
+  color: #111827;
+  border-color: #f59e0b;
+  box-shadow: 0 0 10px rgba(250, 204, 21, 0.55);
+}
+
+.rb2-relay-btn.rb2-relay-error {
+  background: #7f1d1d;
+  color: #fee2e2;
+  border-color: #ef4444;
+}
+/* === FIN couleurs bloc RB2 Terrain === */
+
+
+
+    /* === TERRAIN2 : distances LIDAR sous carte, grille 2x2 forcée === */
+    .lidar-distance-grid {
+      display: grid !important;
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      grid-template-rows: auto auto !important;
+      gap: 6px !important;
+      margin-top: 7px !important;
+      width: 100% !important;
+    }
+
+    .lidar-distance-btn {
+      display: block !important;
+      background: #101010 !important;
+      border: 1px solid #444 !important;
+      border-radius: 7px !important;
+      padding: 6px 4px !important;
+      text-align: center !important;
+      min-height: 42px !important;
+      box-sizing: border-box !important;
+    }
+
+    .lidar-distance-label {
+      display: block !important;
+      color: #ddd !important;
+      font-size: 12px !important;
+      font-weight: 700 !important;
+      line-height: 1.1 !important;
+      margin-bottom: 3px !important;
+    }
+
+    .lidar-distance-value {
+      display: block !important;
+      color: #fff !important;
+      font-size: 15px !important;
+      font-weight: 800 !important;
+      line-height: 1.15 !important;
+    }
+
+    .lidar-mini-status {
+      color: #aaa !important;
+      font-size: 12px !important;
+      line-height: 1.25 !important;
+      margin-top: 5px !important;
+      text-align: center !important;
+    }
+    /* === FIN TERRAIN2 distances LIDAR === */
+
+
+    /* === TERRAIN2 : hauteur réelle du bloc RB2 Terrain jusqu'au bas de la carte LIDAR === */
+    .rightcol > .controls {
+      min-height: 455px !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-between !important;
+    }
+
+    .controls .rb2-relay-row {
+      margin-top: 4px !important;
+      margin-bottom: 7px !important;
+    }
+
+    .controls .rb2-status-light {
+      margin-bottom: 7px !important;
+    }
+
+    .controls .drive-grid {
+      gap: 6px !important;
+      margin-top: 4px !important;
+      margin-bottom: 7px !important;
+    }
+
+    .controls .drive-btn {
+      min-height: 42px !important;
+      padding-top: 7px !important;
+      padding-bottom: 7px !important;
+      font-size: 14px !important;
+    }
+
+    .controls .speed-row {
+      margin-top: 6px !important;
+      margin-bottom: 9px !important;
+    }
+
+    .controls .speed-btn {
+      min-height: 32px !important;
+      font-size: 12px !important;
+    }
+
+    .controls .pt-grid {
+      gap: 6px !important;
+      margin-top: 5px !important;
+      margin-bottom: 7px !important;
+    }
+
+    .controls .pt-grid button {
+      min-height: 36px !important;
+      padding-top: 6px !important;
+      padding-bottom: 6px !important;
+      font-size: 13px !important;
+    }
+
+    .controls .small-row {
+      margin-top: 6px !important;
+      gap: 6px !important;
+    }
+
+    .controls .small-row button {
+      min-height: 30px !important;
+      padding-top: 5px !important;
+      padding-bottom: 5px !important;
+    }
+    /* === FIN hauteur réelle bloc RB2 Terrain === */
+
+
+
+    /* === TERRAIN2 : commandes RB2 visuel type terrain === */
+
+    /* Grille moteurs en vraie croix :
+         Avance
+      Gauche STOP Droite
+         Recul
+    */
+    .controls .drive-grid {
+      display: grid !important;
+      grid-template-columns: repeat(3, 76px) !important;
+      grid-template-rows: repeat(3, 48px) !important;
+      gap: 7px !important;
+      justify-content: center !important;
+      align-items: center !important;
+      max-width: 260px !important;
+      margin: 7px auto 8px auto !important;
+    }
+
+    .controls .drive-grid > div {
+      display: block !important;
+      width: 76px !important;
+      height: 48px !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+
+    .controls .drive-btn {
+      width: 76px !important;
+      height: 48px !important;
+      min-height: 48px !important;
+      padding: 6px 6px !important;
+      font-size: 14px !important;
+      font-weight: 800 !important;
+      border-radius: 8px !important;
+      box-sizing: border-box !important;
+      justify-self: center !important;
+      align-self: center !important;
+    }
+
+    .controls .drive-btn[data-label="avance"] {
+      grid-column: 2 !important;
+      grid-row: 1 !important;
+    }
+
+    .controls .drive-btn[data-label="gauche"] {
+      grid-column: 1 !important;
+      grid-row: 2 !important;
+    }
+
+    .controls .drive-btn[data-label="stop"] {
+      grid-column: 2 !important;
+      grid-row: 2 !important;
+    }
+
+    .controls .drive-btn[data-label="droite"] {
+      grid-column: 3 !important;
+      grid-row: 2 !important;
+    }
+
+    .controls .drive-btn[data-label="recul"] {
+      grid-column: 2 !important;
+      grid-row: 3 !important;
+    }
+
+    /* Ligne vitesse un peu plus solide */
+    .controls .speed-row {
+      max-width: 260px !important;
+      margin: 7px auto 9px auto !important;
+      gap: 6px !important;
+    }
+
+    .controls .speed-btn {
+      min-height: 33px !important;
+      font-size: 12px !important;
+      font-weight: 800 !important;
+      border-radius: 7px !important;
+    }
+
+    /* Pan/Tilt plus proche du format terrain */
+    .controls .pt-grid {
+      display: grid !important;
+      grid-template-columns: repeat(3, 76px) !important;
+      gap: 7px !important;
+      justify-content: center !important;
+      align-items: center !important;
+      max-width: 260px !important;
+      margin: 7px auto 7px auto !important;
+    }
+
+    .controls .pt-grid button {
+      width: 76px !important;
+      min-height: 40px !important;
+      padding: 6px 6px !important;
+      font-size: 13px !important;
+      font-weight: 800 !important;
+      border-radius: 8px !important;
+      box-sizing: border-box !important;
+    }
+
+    .controls .pt-grid .readout {
+      width: 76px !important;
+      min-height: 40px !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      font-size: 13px !important;
+      font-weight: 800 !important;
+      box-sizing: border-box !important;
+    }
+
+    .controls .small-row {
+      max-width: 260px !important;
+      margin: 7px auto 0 auto !important;
+      gap: 7px !important;
+    }
+
+    .controls .small-row button {
+      min-height: 34px !important;
+      font-size: 12px !important;
+      font-weight: 800 !important;
+      border-radius: 7px !important;
+    }
+
+    /* === FIN TERRAIN2 commandes RB2 visuel type terrain === */
+
+
+
+    /* === TERRAIN2 : correction affichage central PanTilt === */
+
+    .controls .pt-grid {
+      display: grid !important;
+      grid-template-columns: repeat(3, 82px) !important;
+      gap: 8px !important;
+      justify-content: center !important;
+      align-items: center !important;
+      max-width: 280px !important;
+      margin: 8px auto 8px auto !important;
+    }
+
+    .controls .pt-grid button {
+      width: 82px !important;
+      min-height: 42px !important;
+      height: 42px !important;
+      padding: 6px 6px !important;
+      font-size: 15px !important;
+      font-weight: 800 !important;
+      border-radius: 8px !important;
+      box-sizing: border-box !important;
+    }
+
+    .controls .pt-grid .pt-readout,
+    .controls .pt-grid .readout {
+      width: 82px !important;
+      height: 52px !important;
+      min-height: 52px !important;
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 3px !important;
+      padding: 4px 3px !important;
+      box-sizing: border-box !important;
+      font-size: 13px !important;
+      font-weight: 800 !important;
+      line-height: 1.1 !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-align: center !important;
+    }
+
+    .controls .pt-grid .pt-readout div {
+      display: block !important;
+      width: 100% !important;
+      text-align: center !important;
+    }
+
+    .controls .pt-grid .pt-readout span {
+      display: inline !important;
+      font-weight: 900 !important;
+    }
+
+    .controls .small-row {
+      display: grid !important;
+      grid-template-columns: repeat(3, 82px) !important;
+      gap: 8px !important;
+      justify-content: center !important;
+      max-width: 280px !important;
+      margin: 9px auto 0 auto !important;
+    }
+
+    .controls .small-row button {
+      width: 82px !important;
+      min-height: 39px !important;
+      height: 39px !important;
+      padding: 6px 6px !important;
+      font-size: 14px !important;
+      font-weight: 800 !important;
+      border-radius: 8px !important;
+      box-sizing: border-box !important;
+    }
+
+    /* === FIN correction affichage central PanTilt === */
+
+
+
+    /* === TERRAIN2 : bouton arrêt RB2 haut === */
+    .rb2-shutdown-btn {
+      float: right !important;
+      background: #b00020 !important;
+      border: 1px solid #ff405c !important;
+      color: #fff !important;
+      font-weight: 900 !important;
+      font-size: 13px !important;
+      padding: 7px 12px !important;
+      border-radius: 8px !important;
+      margin-left: 10px !important;
+      cursor: pointer !important;
+      box-shadow: 0 0 0 1px rgba(255, 80, 100, 0.25) !important;
+    }
+
+    .rb2-shutdown-btn:hover {
+      background: #d00028 !important;
+      border-color: #ff6b7f !important;
+    }
+
+    .rb2-shutdown-top {
+      text-align: right !important;
+      margin: 4px 0 6px 0 !important;
+    }
+    /* === FIN bouton arrêt RB2 haut === */
+
+
+
+    /* === TERRAIN2 FIX : vraie croix moteur === */
+    .controls .drive-grid {
+      display: grid !important;
+      grid-template-columns: repeat(3, 82px) !important;
+      grid-template-rows: repeat(3, 50px) !important;
+      gap: 8px !important;
+      justify-content: center !important;
+      align-items: center !important;
+      max-width: 280px !important;
+      margin: 8px auto 10px auto !important;
+    }
+
+    .controls .drive-grid > div {
+      width: 82px !important;
+      height: 50px !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+
+    .controls .drive-btn {
+      width: 82px !important;
+      height: 50px !important;
+      min-height: 50px !important;
+      font-size: 14px !important;
+      font-weight: 800 !important;
+      border-radius: 8px !important;
+    }
+    /* === FIN TERRAIN2 FIX vraie croix moteur === */
+
+
+
+    /* === TERRAIN2 : boutons zoom LIDAR === */
+    .lidar-zoom-row {
+      display: grid !important;
+      grid-template-columns: 1fr 1fr 1.45fr !important;
+      gap: 6px !important;
+      margin-top: 7px !important;
+    }
+
+    .lidar-zoom-btn {
+      min-height: 32px !important;
+      padding: 5px 8px !important;
+      font-size: 12px !important;
+      font-weight: 800 !important;
+      border-radius: 7px !important;
+      background: #1f2937 !important;
+      border: 1px solid #4b5563 !important;
+      color: #fff !important;
+      cursor: pointer !important;
+    }
+
+    .lidar-zoom-btn:hover {
+      background: #374151 !important;
+      border-color: #9ca3af !important;
+    }
+    /* === FIN boutons zoom LIDAR === */
+
+
+
+    /* === TERRAIN2 : suppression titres blocs principaux === */
+    .media-card > h2,
+    .controls > h2 {
+      display: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      height: 0 !important;
+      overflow: hidden !important;
+    }
+
+    .media-card {
+      padding-top: 7px !important;
+    }
+
+    .controls {
+      padding-top: 7px !important;
+    }
+
+    .rb2-relay-row {
+      margin-top: 0 !important;
+    }
+    /* === FIN suppression titres blocs principaux === */
+
+</style>
+</head>
+
+<body>
+  <div class="rb2-shutdown-top"><button id="rb2ShutdownBtn" class="rb2-shutdown-btn" onclick="rb2Terrain2Shutdown()">ARRÊT RB2</button></div>
+  <div class="topbar">
+    <div class="top-title">
+      <strong>RB2 Terrain2</strong>
+      <span> — Créé par Roméo St-Cyr en juin 2026</span>
+      <span id="rb2TopState"></span>
+    </div>
+<button id="wifiLocalBtn" class="green disabled" title="Route WiFi Local à confirmer avant activation">WiFi Local ON</button>
+<a class="linkbtn danger" href="/secours">SECOURS</a>
+    <a class="linkbtn blue" href="/lidar_drive">LIDAR DRIVE</a>
+  </div>
+
+  <main class="page">
+    <section class="leftcol">
+      <section class="card media-card">
+<div class="media-row">
+          <div class="media-panel camera-box">
+            <h3>CAMÉRA</h3>
+            <img id="camImg" src="/zero_cam_stream.mjpg" alt="Caméra Zero 2 W RB2">
+
+            <div class="camera-capture-row">
+              <button id="photoBtn" class="blue" onclick="takePhoto()">PHOTO</button>
+              <button id="videoBtn" class="orange" onclick="toggleVideo()">VIDÉO</button>
+              <button id="capturesBtn" class="purple" onclick="openCaptures()">TÉLÉCHARGEMENT</button>
+            </div>
+<div class="status-row">
+              <button onclick="openCamera()">CAMÉRA DIRECTE</button>
+              <button onclick="restartCamera()">RESTART CAMÉRA</button>
+</div>
+          </div>
+
+          <div class="media-panel">
+            <h3>CARTE LIDAR</h3>
+            <div class="lidar-wrap">
+              <canvas id="lidarCanvas" width="900" height="620"></canvas>
+
+            <div class="lidar-zoom-row">
+              <button id="lidarZoomPlus" class="lidar-zoom-btn" onclick="rb2Terrain2LidarZoomPlus(); return false;">ZOOM +</button>
+              <button id="lidarZoomMinus" class="lidar-zoom-btn" onclick="rb2Terrain2LidarZoomMinus(); return false;">ZOOM -</button>
+              <button id="lidarDistanceToggle" class="lidar-zoom-btn" onclick="rb2Terrain2LidarToggleDistances(); return false;">DISTANCES OFF</button>
+            </div>
+            </div>
+            <div class="lidar-distance-grid">
+              <div class="lidar-distance-btn">
+                <div class="lidar-distance-label">Avant</div>
+                <div class="lidar-distance-value"><span id="lidarFront">---</span> cm</div>
+              </div>
+              <div class="lidar-distance-btn">
+                <div class="lidar-distance-label">Droite</div>
+                <div class="lidar-distance-value"><span id="lidarRight">---</span> cm</div>
+              </div>
+              <div class="lidar-distance-btn">
+                <div class="lidar-distance-label">Arrière</div>
+                <div class="lidar-distance-value"><span id="lidarBack">---</span> cm</div>
+              </div>
+              <div class="lidar-distance-btn">
+                <div class="lidar-distance-label">Gauche</div>
+                <div class="lidar-distance-value"><span id="lidarLeft">---</span> cm</div>
+              </div>
+            </div>
+
+            <div class="lidar-mini-status">
+              Min : <span id="lidarMin">---</span> cm —
+              âge : <span id="lidarAge">---</span> s —
+              <span id="lidarState">attente</span>
+            </div>
+</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="rightcol">
+      <div class="controls">
+<div class="rb2-relay-row">
+        <button id="rb2LightBtn" class="rb2-relay-btn rb2-relay-off">LUMIÈRES OFF</button>
+        <button id="rb2Relay2Btn" class="rb2-relay-btn rb2-relay-off">RELAIS 2 OFF</button>
+      </div>
+
+<div class="rb2-relay-row">
+</div>
+
+        <div id="rb2StatusLight" class="rb2-status-light">
+          État RB2 : vérification...
+        </div>
+
+        <div class="status drive-status-hidden">Direction : <span id="driveStatus">arrêt</span></div>
+
+                        <div class="drive-grid" id="drivePad">
+          <div></div>
+          <button class="drive-btn" data-label="avance" data-drive="d20,20">Avance</button>
+          <div></div>
+
+          <button class="drive-btn" data-label="gauche" data-drive="d-20,20">Gauche</button>
+          <button class="drive-btn stop" data-label="stop" data-drive="d0,0">STOP</button>
+          <button class="drive-btn" data-label="droite" data-drive="d20,-20">Droite</button>
+
+          <div></div>
+          <button class="drive-btn" data-label="recul" data-drive="d-20,-20">Recul</button>
+          <div></div>
+        </div>
+
+        <div class="speed-row">
+          <span class="speed-label">Vitesse</span>
+          <button id="speed25" class="speed-btn" onclick="setDriveSpeed(25)" title="Vitesse lente utile : d15">25%</button>
+          <button id="speed50" class="speed-btn" onclick="setDriveSpeed(50)" title="Vitesse moyenne : d17">50%</button>
+          <button id="speed75" class="speed-btn" onclick="setDriveSpeed(75)" title="Vitesse rapide : d19">75%</button>
+          <button id="speed100" class="speed-btn speed-active" onclick="setDriveSpeed(100)" title="Vitesse maximum actuelle : d20">100%</button>
+        </div>
+
+        <div class="pt-grid">
+          <div></div>
+          <button onclick="tiltUp()">▲</button>
+          <div></div>
+
+          <button onclick="panLeft()">◀</button>
+          <div class="readout pt-readout">
+            <div>Pan : <span id="panValue">95</span></div>
+            <div>Tilt : <span id="tiltValue">90</span></div>
+          </div>
+          <button onclick="panRight()">▶</button>
+
+          <div></div>
+          <button onclick="tiltDown()">▼</button>
+          <div></div>
+        </div>
+
+        <div class="small-row">
+          <button onclick="setPanTilt(95, 90)">Centre</button>
+          <button onclick="setTiltOnly(145)">T 145</button>
+          <button class="stop" onclick="setTiltOnly(68)">T 68</button>
+        </div>
+</div>
+</section>
+  </main>
+
+<script>
+let currentDrive = "s";
+let driveSpeedPercent = 100;
+let driveSpeedValue = 20;
+let driveTimer = null;
+let pan = 95;
+let tilt = 90;
+let lightOn = false;
+let relay2On = false;
+let videoOn = false;
+
+const logEl = () => document.getElementById("mainLog");
+
+function log(msg) {
+  const el = logEl();
+  const t = new Date().toLocaleTimeString();
+  el.textContent = `[${t}] ${msg}\n` + el.textContent;
+}
+
+async function postJson(url, data, timeoutMs=2500) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      cache: "no-store",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(data || {}),
+      signal: ctrl.signal
+    });
+    const txt = await r.text();
+    try { return JSON.parse(txt); }
+    catch { return {ok:r.ok, text:txt}; }
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+async function getJson(url, timeoutMs=2500) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {cache: "no-store", signal: ctrl.signal});
+    return await r.json();
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+async function sendCmd(cmd, label) {
+  currentDrive = cmd;
+  if (label) document.getElementById("driveStatus").textContent = label;
+  try {
+    const j = await postJson("/cmd", {cmd: cmd}, 2200);
+    if (!j.ok && j.error) log("Commande erreur: " + j.error);
+  } catch(e) {
+    log("Commande impossible: " + e);
+  }
+}
+
+function sendStop() {
+  clearInterval(driveTimer);
+  driveTimer = null;
+  currentDrive = "s";
+  document.getElementById("driveStatus").textContent = "arrêt";
+  document.querySelectorAll(".drive-btn").forEach(b => b.classList.remove("active"));
+  sendCmd("s", "arrêt");
+}
+
+function startDrive(btn) {
+  const cmd = btn.dataset.drive || btn.dataset.cmd || "s";
+  const label = btn.dataset.label || cmd;
+
+  document.querySelectorAll(".drive-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+
+  if (cmd === "s" || cmd === "d0,0") {
+    sendStop();
+    return;
+  }
+
+  sendCmd(cmd, label);
+
+  clearInterval(driveTimer);
+  driveTimer = setInterval(() => {
+    if (currentDrive && currentDrive !== "s") sendCmd(currentDrive);
+  }, 350);
+}
+
+
+function setDriveSpeed(percent) {
+  driveSpeedPercent = percent;
+
+  if (percent === 25) driveSpeedValue = 5;
+  else if (percent === 50) driveSpeedValue = 10;
+  else if (percent === 75) driveSpeedValue = 15;
+  else driveSpeedValue = 20;
+
+  document.querySelectorAll(".speed-btn").forEach(b => b.classList.remove("speed-active"));
+  const active = document.getElementById("speed" + percent);
+  if (active) active.classList.add("speed-active");
+
+  updateDriveButtonSpeeds();
+  log("Vitesse : " + percent + "%");
+}
+
+function updateDriveButtonSpeeds() {
+  const v = driveSpeedValue;
+
+  const map = [
+    ["avance",  "d" + v + "," + v],
+    ["gauche",  "d-" + v + "," + v],
+    ["droite",  "d" + v + ",-" + v],
+    ["recul",   "d-" + v + ",-" + v],
+    ["stop",    "d0,0"]
+  ];
+
+  for (const [label, cmd] of map) {
+    const b = document.querySelector('.drive-btn[data-label="' + label + '"]');
+    if (b) b.dataset.drive = cmd;
+  }
+}
+
+function bindDriveButtons() {
+  document.querySelectorAll(".drive-btn").forEach(btn => {
+    btn.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      try { btn.setPointerCapture(e.pointerId); } catch {}
+      startDrive(btn);
+    });
+    btn.addEventListener("pointerup", e => {
+      e.preventDefault();
+      sendStop();
+    });
+    btn.addEventListener("pointercancel", sendStop);
+    btn.addEventListener("lostpointercapture", sendStop);
+    btn.addEventListener("mouseleave", e => {
+      if (e.buttons) sendStop();
+    });
+  });
+}
+
+function updatePanTiltLabels() {
+  const p = document.getElementById("panValue");
+  const t = document.getElementById("tiltValue");
+  if (p) p.textContent = pan;
+  if (t) t.textContent = tilt;
+}
+
+async function panStep(delta) {
+  pan = Math.max(60, Math.min(135, pan + delta));
+  updatePanTiltLabels();
+  await sendCmd("p" + pan, "pan " + pan);
+}
+
+async function tiltStep(delta) {
+  tilt = Math.max(68, Math.min(145, tilt + delta));
+  updatePanTiltLabels();
+  await sendCmd("t" + tilt, "tilt " + tilt);
+}
+
+async function centerPanTilt() {
+  pan = 95;
+  tilt = 90;
+  updatePanTiltLabels();
+  await sendCmd("p" + pan, "pan centre");
+  setTimeout(() => sendCmd("t" + tilt, "tilt centre"), 250);
+}
+
+async function toggleLight() {
+  lightOn = !lightOn;
+  try {
+    const j = await postJson("/light", {state: lightOn ? "on" : "off"}, 2200);
+    if (j.ok) {
+      document.getElementById("lightBtn").textContent = lightOn ? "LUMIÈRES ON" : "LUMIÈRES OFF";
+      log("Lumières " + (lightOn ? "ON" : "OFF"));
+    } else {
+      lightOn = !lightOn;
+      log("Erreur lumières: " + (j.error || "inconnue"));
+    }
+  } catch(e) {
+    lightOn = !lightOn;
+    log("Erreur lumières: " + e);
+  }
+}
+
+async function toggleRelay2() {
+  relay2On = !relay2On;
+  try {
+    const j = await postJson("/relay2", {state: relay2On ? "on" : "off"}, 2200);
+    if (j.ok) {
+      document.getElementById("relay2Btn").textContent = relay2On ? "RELAIS 2 ON" : "RELAIS 2 OFF";
+      log("Relais 2 " + (relay2On ? "ON" : "OFF"));
+    } else {
+      relay2On = !relay2On;
+      log("Erreur relais 2: " + (j.error || "inconnue"));
+    }
+  } catch(e) {
+    relay2On = !relay2On;
+    log("Erreur relais 2: " + e);
+  }
+}
+
+
+function panLeft() {
+  return panStep(-5);
+}
+
+function panRight() {
+  return panStep(5);
+}
+
+function tiltUp() {
+  return tiltStep(5);
+}
+
+function tiltDown() {
+  return tiltStep(-5);
+}
+
+async function setPanTilt(newPan, newTilt) {
+  pan = Math.max(60, Math.min(135, Number(newPan)));
+  tilt = Math.max(68, Math.min(145, Number(newTilt)));
+  updatePanTiltLabels();
+  await sendCmd("p" + pan, "pan " + pan);
+  setTimeout(() => sendCmd("t" + tilt, "tilt " + tilt), 200);
+}
+
+async function setTiltOnly(newTilt) {
+  tilt = Math.max(68, Math.min(145, Number(newTilt)));
+  updatePanTiltLabels();
+  await sendCmd("t" + tilt, "tilt " + tilt);
+}
+
+async function rb2ToggleRelay(which) {
+  if (which === "light") {
+    lightOn = !lightOn;
+    const b = document.getElementById("rb2LightBtn");
+    try {
+      const j = await postJson("/light", {state: lightOn ? "on" : "off"}, 2200);
+      if (j.ok) {
+        if (b) {
+          b.textContent = lightOn ? "LUMIÈRES ON" : "LUMIÈRES OFF";
+          b.classList.toggle("rb2-relay-on", lightOn);
+          b.classList.toggle("rb2-relay-off", !lightOn);
+        }
+        const top = document.getElementById("lightBtn");
+        if (top) top.textContent = lightOn ? "LUMIÈRES ON" : "LUMIÈRES OFF";
+        log("Lumières " + (lightOn ? "ON" : "OFF"));
+      } else {
+        lightOn = !lightOn;
+        log("Erreur lumières: " + (j.error || "inconnue"));
+      }
+    } catch(e) {
+      lightOn = !lightOn;
+      log("Erreur lumières: " + e);
+    }
+    return;
+  }
+
+  if (which === "relay2") {
+    relay2On = !relay2On;
+    const b = document.getElementById("rb2Relay2Btn");
+    try {
+      const j = await postJson("/relay2", {state: relay2On ? "on" : "off"}, 2200);
+      if (j.ok) {
+        if (b) {
+          b.textContent = relay2On ? "RELAIS 2 ON" : "RELAIS 2 OFF";
+          b.classList.toggle("rb2-relay-on", relay2On);
+          b.classList.toggle("rb2-relay-off", !relay2On);
+        }
+        const top = document.getElementById("relay2Btn");
+        if (top) top.textContent = relay2On ? "RELAIS 2 ON" : "RELAIS 2 OFF";
+        log("Relais 2 " + (relay2On ? "ON" : "OFF"));
+      } else {
+        relay2On = !relay2On;
+        log("Erreur relais 2: " + (j.error || "inconnue"));
+      }
+    } catch(e) {
+      relay2On = !relay2On;
+      log("Erreur relais 2: " + e);
+    }
+  }
+}
+
+function setTextIfExists(id, val, digits=null) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (val === undefined || val === null || val === "") {
+    el.textContent = "---";
+    return;
+  }
+  const n = Number(val);
+  if (digits !== null && Number.isFinite(n)) {
+    el.textContent = n.toFixed(digits);
+  } else {
+    el.textContent = val;
+  }
+}
+
+async function updateControlLidar() {
+  try {
+    const j = await getJson("/lidar", 2500);
+    const d = j.data || j || {};
+    setTextIfExists("lidarFront", d.front_cm);
+    setTextIfExists("lidarRight", d.right_cm);
+    setTextIfExists("lidarLeft", d.left_cm);
+    setTextIfExists("lidarBack", d.back_cm);
+    setTextIfExists("lidarMin", d.min_cm);
+    setTextIfExists("lidarAge", j.age_s, 1);
+    const st = document.getElementById("lidarState");
+    if (st) st.textContent = j.ok === false ? "erreur" : "OK";
+  } catch(e) {
+    const st = document.getElementById("lidarState");
+    if (st) st.textContent = "erreur";
+  }
+}
+
+function openCamera() {
+  window.open("/zero_cam_stream.mjpg", "_blank");
+}
+
+async function restartCamera() {
+  log("Restart caméra demandé...");
+  try {
+    const j = await postJson("/zero_cam_restart", {}, 7000);
+    log(j.ok ? "Restart caméra OK" : "Restart caméra: réponse reçue");
+    const img = document.getElementById("camImg");
+    img.src = "/zero_cam_stream.mjpg?t=" + Date.now();
+  } catch(e) {
+    log("Erreur restart caméra: " + e);
+  }
+}
+
+
+async function takePhoto() {
+  const b = document.getElementById("photoBtn");
+  if (!b) return;
+
+  b.classList.remove("photo-error");
+  b.classList.add("photo-flash");
+  b.textContent = "PHOTO...";
+
+  try {
+    const j = await postJson("/zero_photo", {}, 8000);
+
+    if (j.ok) {
+      b.textContent = "PHOTO OK";
+      b.classList.remove("photo-error");
+      b.classList.add("photo-flash");
+      log("Photo prise");
+    } else {
+      b.textContent = "PHOTO ERREUR";
+      b.classList.remove("photo-flash");
+      b.classList.add("photo-error");
+      log("Erreur photo");
+    }
+  } catch(e) {
+    b.textContent = "PHOTO ERREUR";
+    b.classList.remove("photo-flash");
+    b.classList.add("photo-error");
+    log("Erreur photo: " + e);
+  }
+
+  setTimeout(() => {
+    b.textContent = "PHOTO";
+    b.classList.remove("photo-flash");
+    b.classList.remove("photo-error");
+  }, 1200);
+}
+
+
+
+async function toggleVideo() {
+  const b = document.getElementById("videoBtn");
+  if (b) {
+    b.textContent = videoOn ? "ARRÊT..." : "VIDÉO...";
+  }
+
+  try {
+    await postJson("/zero_video_toggle", {}, 8000);
+    await updateVideoStatus();
+    log("Commande vidéo envoyée");
+  } catch(e) {
+    if (b) {
+      b.textContent = "VIDÉO ERREUR";
+      b.classList.remove("video-active");
+      b.classList.add("photo-error");
+      setTimeout(updateVideoStatus, 1500);
+    }
+    log("Erreur vidéo: " + e);
+  }
+}
+
+
+async function updateVideoStatus() {
+  const b = document.getElementById("videoBtn");
+  if (!b) return;
+
+  try {
+    const j = await getJson("/zero_video_status", 3500);
+    videoOn = !!(j.recording || j.video_on || j.active || j.on);
+
+    if (videoOn) {
+      b.textContent = "ENREG.";
+      b.classList.remove("orange");
+      b.classList.add("video-active");
+      b.title = "Enregistrement vidéo en cours — cliquer pour arrêter";
+    } else {
+      b.textContent = "VIDÉO";
+      b.classList.remove("video-active");
+      b.classList.add("orange");
+      b.title = "Démarrer la vidéo";
+    }
+  } catch(e) {
+    b.textContent = videoOn ? "ENREG. ?" : "VIDÉO ?";
+    b.title = "État vidéo inconnu";
+  }
+}
+
+
+function openCaptures() {
+  window.open("/captures", "_blank");
+}
+
+function normalizePoint(pt) {
+  if (Array.isArray(pt)) {
+    if (pt.length >= 2) return {x: Number(pt[0]), y: Number(pt[1])};
+  }
+
+  if (pt && typeof pt === "object") {
+    if ("x" in pt && "y" in pt) return {x: Number(pt.x), y: Number(pt.y)};
+    if ("x_cm" in pt && "y_cm" in pt) return {x: Number(pt.x_cm), y: Number(pt.y_cm)};
+    if ("x_mm" in pt && "y_mm" in pt) return {x: Number(pt.x_mm) / 10, y: Number(pt.y_mm) / 10};
+
+    const a = pt.angle_deg ?? pt.angle;
+    const d = pt.dist_cm ?? pt.distance_cm ?? pt.r_cm ?? pt.range_cm;
+    if (a !== undefined && d !== undefined) {
+      const rad = Number(a) * Math.PI / 180;
+      const r = Number(d);
+      return {x: Math.cos(rad) * r, y: Math.sin(rad) * r};
+    }
+  }
+
+  return null;
+}
+
+function extractPoints(j) {
+  const candidates = [
+    j && j.points,
+    j && j.lidar_points,
+    j && j.map_points,
+    j && j.scan_points,
+    j && j.map && j.map.points,
+    j && j.data && j.data.points
+  ];
+
+  for (const c of candidates) {
+    if (Array.isArray(c)) {
+      return c.map(normalizePoint).filter(p => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+    }
+  }
+
+  return [];
+}
+
+function drawLidar(points) {
+  const canvas = document.getElementById("lidarCanvas");
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0,0,w,h);
+
+  ctx.fillStyle = "#050505";
+  ctx.fillRect(0,0,w,h);
+
+  const cx = w / 2;
+  const cy = h / 2;
+  const maxAbs = Math.max(80, ...points.map(p => Math.max(Math.abs(p.x), Math.abs(p.y))));
+  const scale = Math.min(w, h) * 0.42 / maxAbs;
+
+  ctx.strokeStyle = "#333";
+  ctx.lineWidth = 1;
+  for (let r = 50; r <= maxAbs; r += 50) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * scale, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = "#555";
+  ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
+
+  ctx.fillStyle = "#ddd";
+  ctx.fillRect(cx - 12, cy - 8, 24, 16);
+
+  ctx.strokeStyle = "#f59e0b";
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx, cy - 36);
+  ctx.stroke();
+
+  ctx.fillStyle = "#38bdf8";
+  for (const p of points) {
+    const x = cx + p.x * scale;
+    const y = cy - p.y * scale;
+    ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+  }
+
+  ctx.fillStyle = "#aaa";
+  ctx.font = "13px Arial";
+  ctx.fillText("AVANT", cx + 8, cy - 42);
+}
+
+async function updateLidar() {
+  try {
+    const j = await getJson("/lidar_map", 2500);
+    const pts = extractPoints(j);
+    drawLidar(pts);
+
+    const ok = pts.length > 0 || j.ok;
+    const ls = document.getElementById("lidarStatus");
+    ls.textContent = ok ? "LIDAR OK" : "LIDAR ?";
+    ls.className = ok ? "pill ok" : "pill warn";
+
+    if (document.getElementById("lidarPoints")) document.getElementById("lidarPoints").textContent = pts.length + " points";
+
+    const front = j.front_cm ?? j.front ?? j.min_front_cm ?? j.forward_cm ?? "—";
+    const rear = j.rear_cm ?? j.rear ?? j.min_rear_cm ?? "—";
+    const fd = document.getElementById("frontDist"); if (fd) fd.textContent = "avant " + front;
+    const rd = document.getElementById("rearDist"); if (rd) rd.textContent = "arrière " + rear;
+  } catch(e) {
+    const ls = document.getElementById("lidarStatus");
+    ls.textContent = "LIDAR NON";
+    ls.className = "pill bad";
+  }
+}
+
+async function updateSimpleStatus() {
+  try {
+    const t = await getJson("/terrain_status", 2500);
+    const top = document.getElementById("rb2TopState");
+    top.textContent = " — RB2 " + (t.ok === false ? "problème" : "actif");
+
+    document.getElementById("panelState").textContent = "panel OK";
+    const rb2st = document.getElementById("rb2StatusLight");
+    if (rb2st) rb2st.textContent = "État RB2 : OK";
+    document.getElementById("panelState").className = "pill ok";
+  } catch(e) {
+    document.getElementById("rb2TopState").textContent = " — état ?";
+    document.getElementById("panelState").textContent = "panel ?";
+    const rb2st = document.getElementById("rb2StatusLight");
+    if (rb2st) rb2st.textContent = "État RB2 : ?";
+    document.getElementById("panelState").className = "pill warn";
+  }
+
+  try {
+    const s = await getJson("/drive_safety_status", 2500);
+    const el = document.getElementById("driveSafetyState");
+    el.textContent = s.ok === false ? "sécurité ?" : "sécurité OK";
+    el.className = s.ok === false ? "pill warn" : "pill ok";
+  } catch(e) {
+    document.getElementById("driveSafetyState").textContent = "sécurité ?";
+    document.getElementById("driveSafetyState").className = "pill warn";
+  }
+
+  try {
+    const w = await getJson("/wifi_return_status", 2500);
+    const el = document.getElementById("wifiReturnState");
+    if (w.active) {
+      el.textContent = "RETOUR WiFi actif";
+      el.className = "pill bad";
+    } else {
+      el.textContent = "Retour WiFi prêt";
+      el.className = "pill ok";
+    }
+  } catch(e) {
+    document.getElementById("wifiReturnState").textContent = "Retour WiFi ?";
+    document.getElementById("wifiReturnState").className = "pill";
+  }
+
+}
+
+window.addEventListener("beforeunload", sendStop);
+
+document.addEventListener("DOMContentLoaded", () => {
+  bindDriveButtons();
+  updatePanTiltLabels();
+  setDriveSpeed(100);
+  sendStop();
+
+  updateLidar();
+  updateControlLidar();
+  updateSimpleStatus();
+  updateVideoStatus();
+
+  setInterval(updateLidar, 800);
+  setInterval(updateControlLidar, 1000);
+  setInterval(updateSimpleStatus, 1500);
+  setInterval(updateVideoStatus, 4000);
+});
+
+
+/* === TERRAIN2 : correction finale fonctions critiques === */
+
+let rb2DriveSeq = Date.now();
+
+function rb2NextDriveSeq() {
+  const now = Date.now();
+  rb2DriveSeq = Math.max(rb2DriveSeq + 1, now);
+  return rb2DriveSeq;
+}
+
+async function rb2InitDriveSeq() {
+  try {
+    const j = await rb2FetchJson("/drive_time", { method: "GET" }, 2500);
+    if (j && Number.isFinite(Number(j.server_ms))) {
+      rb2DriveSeq = Number(j.server_ms);
+    }
+  } catch(e) {
+    rb2DriveSeq = Date.now();
+  }
+}
+
+function rb2FetchJson(path, options = {}, timeoutMs = 8000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
+  return fetch(path, Object.assign({}, options, {
+    signal: ctrl.signal,
+    cache: "no-store"
+  })).then(async r => {
+    clearTimeout(t);
+    const text = await r.text();
+    let j = {};
+    try { j = text ? JSON.parse(text) : {}; }
+    catch(e) { j = { raw: text }; }
+
+    if (!r.ok) {
+      throw new Error(path + " HTTP " + r.status + " " + text.slice(0, 80));
+    }
+
+    return j;
+  });
+}
+
+async function rb2SendDrive(cmd) {
+  const payload = {
+    cmd: cmd,
+    drive_seq: rb2NextDriveSeq()
+  };
+
+  try {
+    const j = await rb2FetchJson("/cmd", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }, 4000);
+
+    const d = document.getElementById("driveStatus");
+    if (d) d.textContent = (cmd === "d0,0") ? "arrêt" : cmd;
+
+    if (j && j.ok === false) {
+      console.log("Commande moteur refusée:", j);
+    }
+  } catch(e) {
+    console.log("Erreur moteur:", e);
+    const d = document.getElementById("driveStatus");
+    if (d) d.textContent = "erreur moteur";
+  }
+}
+
+function rb2RebindDriveButtons() {
+  updateDriveButtonSpeeds();
+
+  document.querySelectorAll("#drivePad .drive-btn").forEach(oldBtn => {
+    const btn = oldBtn.cloneNode(true);
+    oldBtn.parentNode.replaceChild(btn, oldBtn);
+
+    const send = () => {
+      const c = btn.dataset.drive || "d0,0";
+      rb2SendDrive(c);
+    };
+
+    const stop = () => {
+      if ((btn.dataset.drive || "") !== "d0,0") {
+        rb2SendDrive("d0,0");
+      }
+    };
+
+    btn.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      send();
+    });
+
+    btn.addEventListener("pointerup", e => {
+      e.preventDefault();
+      stop();
+    });
+
+    btn.addEventListener("pointerleave", e => {
+      stop();
+    });
+
+    btn.addEventListener("pointercancel", e => {
+      stop();
+    });
+
+    btn.addEventListener("click", e => {
+      e.preventDefault();
+      if ((btn.dataset.drive || "") === "d0,0") {
+        rb2SendDrive("d0,0");
+      }
+    });
+  });
+}
+
+function setDriveSpeed(percent) {
+  driveSpeedPercent = percent;
+
+  if (percent === 25) driveSpeedValue = 5;
+  else if (percent === 50) driveSpeedValue = 10;
+  else if (percent === 75) driveSpeedValue = 15;
+  else driveSpeedValue = 20;
+
+  document.querySelectorAll(".speed-btn").forEach(b => b.classList.remove("speed-active"));
+  const active = document.getElementById("speed" + percent);
+  if (active) active.classList.add("speed-active");
+
+  updateDriveButtonSpeeds();
+}
+
+function updateDriveButtonSpeeds() {
+  const v = driveSpeedValue || 20;
+  const mapping = {
+    avance: "d" + v + "," + v,
+    gauche: "d-" + v + "," + v,
+    droite: "d" + v + ",-" + v,
+    recul: "d-" + v + ",-" + v,
+    stop: "d0,0"
+  };
+
+  for (const [label, cmd] of Object.entries(mapping)) {
+    const b = document.querySelector('#drivePad .drive-btn[data-label="' + label + '"]');
+    if (b) b.dataset.drive = cmd;
+  }
+}
+
+function rb2IsOn(j) {
+  const v = j.state ?? j.on ?? j.active ?? j.enabled ?? j.value;
+  if (typeof v === "string") {
+    return ["on", "true", "1", "yes", "oui"].includes(v.toLowerCase());
+  }
+  return !!v;
+}
+
+async function rb2ToggleRelay(which) {
+  const path = which === "relay2" ? "/relay2" : "/light";
+  const btnId = which === "relay2" ? "rb2Relay2Btn" : "rb2LightBtn";
+  const label = which === "relay2" ? "RELAIS 2" : "LUMIÈRES";
+  const btn = document.getElementById(btnId);
+
+  if (btn) btn.textContent = label + " ...";
+
+  try {
+    let j;
+
+    try {
+      j = await rb2FetchJson(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      }, 5000);
+    } catch(ePost) {
+      j = await rb2FetchJson(path, { method: "GET" }, 5000);
+    }
+
+    const on = rb2IsOn(j);
+
+    if (btn) {
+      btn.textContent = label + (on ? " ON" : " OFF");
+      btn.classList.toggle("rb2-relay-on", on);
+      btn.classList.toggle("rb2-relay-off", !on);
+    }
+  } catch(e) {
+    if (btn) btn.textContent = label + " ?";
+    console.log("Erreur relais:", e);
+  }
+}
+
+async function takePhoto() {
+  const b = document.getElementById("photoBtn");
+  if (!b) return;
+
+  b.classList.remove("photo-error");
+  b.classList.add("photo-flash");
+  b.textContent = "PHOTO...";
+
+  try {
+    await rb2FetchJson("/zero_photo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    }, 15000);
+
+    b.textContent = "PHOTO OK";
+    b.classList.remove("photo-error");
+    b.classList.add("photo-flash");
+  } catch(e) {
+    b.textContent = "PHOTO ERREUR";
+    b.classList.remove("photo-flash");
+    b.classList.add("photo-error");
+    console.log("Erreur photo:", e);
+  }
+
+  setTimeout(() => {
+    b.textContent = "PHOTO";
+    b.classList.remove("photo-flash");
+    b.classList.remove("photo-error");
+  }, 1200);
+}
+
+async function toggleVideo() {
+  const b = document.getElementById("videoBtn");
+  if (b) b.textContent = videoOn ? "ARRÊT..." : "VIDÉO...";
+
+  try {
+    await rb2FetchJson("/zero_video_toggle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    }, 15000);
+
+    setTimeout(updateVideoStatus, 500);
+  } catch(e) {
+    if (b) {
+      b.textContent = "VIDÉO ERREUR";
+      b.classList.remove("video-active");
+      b.classList.add("photo-error");
+    }
+    console.log("Erreur vidéo:", e);
+    setTimeout(updateVideoStatus, 1500);
+  }
+}
+
+async function updateVideoStatus() {
+  const b = document.getElementById("videoBtn");
+  if (!b) return;
+
+  try {
+    const j = await rb2FetchJson("/zero_video_status", { method: "GET" }, 5000);
+    videoOn = !!(j.recording || j.video_on || j.active || j.on);
+
+    if (videoOn) {
+      b.textContent = "ENREG.";
+      b.classList.remove("orange");
+      b.classList.remove("photo-error");
+      b.classList.add("video-active");
+      b.title = "Enregistrement vidéo en cours — cliquer pour arrêter";
+    } else {
+      b.textContent = "VIDÉO";
+      b.classList.remove("video-active");
+      b.classList.remove("photo-error");
+      b.classList.add("orange");
+      b.title = "Démarrer la vidéo";
+    }
+  } catch(e) {
+    b.textContent = "VIDÉO ?";
+    console.log("État vidéo inconnu:", e);
+  }
+}
+
+window.addEventListener("load", async () => {
+  await rb2InitDriveSeq();
+  rb2RebindDriveButtons();
+  setDriveSpeed(100);
+  updateVideoStatus();
+});
+
+/* === FIN correction finale fonctions critiques === */
+
+
+
+/* === TERRAIN2 : fonction arrêt RB2 === */
+async function rb2Terrain2Shutdown() {
+  const ok1 = confirm("Éteindre RB2 maintenant ?\n\nLes moteurs seront arrêtés, puis le système sera éteint.");
+  if (!ok1) return;
+
+  const ok2 = confirm("Confirmation finale : arrêter RB2 ?");
+  if (!ok2) return;
+
+  const b = document.getElementById("rb2ShutdownBtn");
+  if (b) {
+    b.textContent = "ARRÊT...";
+    b.disabled = true;
+  }
+
+  try {
+    await fetch("/system_shutdown_all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      cache: "no-store"
+    });
+
+    if (b) b.textContent = "ARRÊT DEMANDÉ";
+  } catch(e) {
+    console.log("Erreur arrêt RB2:", e);
+    if (b) {
+      b.textContent = "ERREUR ARRÊT";
+      b.disabled = false;
+    }
+  }
+}
+/* === FIN fonction arrêt RB2 === */
+
+</script>
+
+<!-- TERRAIN2 FORCE-ACTIVE START -->
+<script>
+(function() {
+  if (window.__RB2_TERRAIN2_FORCE_ACTIVE__) return;
+  window.__RB2_TERRAIN2_FORCE_ACTIVE__ = true;
+
+  var seq = Date.now();
+  var speed = 20;
+  var driveTimer = null;
+  var pan = 95;
+  var tilt = 90;
+  var videoOn = false;
+
+  function clamp(v, lo, hi) {
+    v = Number(v);
+    if (!Number.isFinite(v)) return lo;
+    return Math.max(lo, Math.min(hi, v));
+  }
+
+  function nextSeq() {
+    var now = Date.now();
+    seq = Math.max(seq + 1, now);
+    return seq;
+  }
+
+  async function fetchJson(path, options, timeoutMs) {
+    timeoutMs = timeoutMs || 8000;
+    options = options || {};
+
+    var ctrl = new AbortController();
+    var t = setTimeout(function() { ctrl.abort(); }, timeoutMs);
+
+    try {
+      var r = await fetch(path, Object.assign({}, options, {
+        signal: ctrl.signal,
+        cache: "no-store"
+      }));
+
+      var text = await r.text();
+      var j = {};
+      try { j = text ? JSON.parse(text) : {}; }
+      catch(e) { j = { raw: text }; }
+
+      if (!r.ok) {
+        throw new Error(path + " HTTP " + r.status + " " + text.slice(0, 120));
+      }
+
+      return j;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  async function initSeq() {
+    try {
+      var j = await fetchJson("/drive_time", { method: "GET" }, 2500);
+      if (j && Number.isFinite(Number(j.server_ms))) {
+        seq = Number(j.server_ms);
+      }
+    } catch(e) {
+      seq = Date.now();
+    }
+  }
+
+  async function sendCmd(cmd, withSeq) {
+    var payload = { cmd: cmd };
+    if (withSeq) payload.drive_seq = nextSeq();
+
+    try {
+      var j = await fetchJson("/cmd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }, 4000);
+
+      var d = document.getElementById("driveStatus");
+      if (d && cmd.charAt(0) === "d") {
+        d.textContent = (cmd === "d0,0" || cmd === "s") ? "arrêt" : cmd;
+      }
+
+      if (j && j.ok === false) {
+        console.log("Commande refusée:", j);
+      }
+
+      return j;
+    } catch(e) {
+      console.log("Erreur commande", cmd, e);
+      var d2 = document.getElementById("driveStatus");
+      if (d2 && cmd.charAt(0) === "d") d2.textContent = "erreur";
+      throw e;
+    }
+  }
+
+  function driveCmd(label) {
+    var v = speed || 20;
+
+    if (label === "avance") return "d" + v + "," + v;
+    if (label === "recul") return "d-" + v + ",-" + v;
+    if (label === "gauche") return "d-" + v + "," + v;
+    if (label === "droite") return "d" + v + ",-" + v;
+
+    return "d0,0";
+  }
+
+  function startDrive(label, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    stopDrive(null, false);
+
+    var cmd = driveCmd(label);
+    sendCmd(cmd, true).catch(function(){});
+
+    driveTimer = setInterval(function() {
+      sendCmd(cmd, true).catch(function(){});
+    }, 300);
+
+    return false;
+  }
+
+  function stopDrive(ev, prevent) {
+    if (ev && prevent !== false) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (driveTimer) {
+      clearInterval(driveTimer);
+      driveTimer = null;
+    }
+
+    sendCmd("d0,0", true).catch(function(){});
+    return false;
+  }
+
+  function setSpeed(percent, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (percent === 25) speed = 15;
+    else if (percent === 50) speed = 17;
+    else if (percent === 75) speed = 19;
+    else speed = 20;
+
+    document.querySelectorAll(".speed-btn").forEach(function(b) {
+      b.classList.remove("speed-active");
+    });
+
+    var active = document.getElementById("speed" + percent);
+    if (active) active.classList.add("speed-active");
+
+    return false;
+  }
+
+  function updatePT() {
+    pan = clamp(pan, 60, 135);
+    tilt = clamp(tilt, 68, 145);
+
+    var p = document.getElementById("panValue");
+    var t = document.getElementById("tiltValue");
+
+    if (p) p.textContent = String(pan);
+    if (t) t.textContent = String(tilt);
+  }
+
+  function sendPT() {
+    updatePT();
+    sendCmd("p" + pan + "," + tilt, false).catch(function(e) {
+      console.log("Erreur pan/tilt:", e);
+    });
+  }
+
+  function panLeft(ev) {
+    if (ev) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+    pan -= 5;
+    sendPT();
+    return false;
+  }
+
+  function panRight(ev) {
+    if (ev) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+    pan += 5;
+    sendPT();
+    return false;
+  }
+
+  function tiltUp(ev) {
+    if (ev) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+    tilt -= 5;
+    sendPT();
+    return false;
+  }
+
+  function tiltDown(ev) {
+    if (ev) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+    tilt += 5;
+    sendPT();
+    return false;
+  }
+
+  function centerPT(ev) {
+    if (ev) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+    pan = 95;
+    tilt = 90;
+    sendPT();
+    return false;
+  }
+
+  function setTilt(v, ev) {
+    if (ev) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+    tilt = v;
+    sendPT();
+    return false;
+  }
+
+  function isOn(j) {
+    var v = j.state;
+    if (v === undefined) v = j.on;
+    if (v === undefined) v = j.active;
+    if (v === undefined) v = j.enabled;
+    if (v === undefined) v = j.value;
+
+    if (typeof v === "string") {
+      return ["on", "true", "1", "yes", "oui"].indexOf(v.toLowerCase()) >= 0;
+    }
+
+    return !!v;
+  }
+
+  async function toggleRelay(which, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    var path = which === "relay2" ? "/relay2" : "/light";
+    var btnId = which === "relay2" ? "rb2Relay2Btn" : "rb2LightBtn";
+    var label = which === "relay2" ? "RELAIS 2" : "LUMIÈRES";
+    var b = document.getElementById(btnId);
+
+    if (b) b.textContent = label + " ...";
+
+    try {
+      var j;
+      try {
+        j = await fetchJson(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        }, 5000);
+      } catch(ePost) {
+        j = await fetchJson(path, { method: "GET" }, 5000);
+      }
+
+      var on = isOn(j);
+
+      if (b) {
+        b.textContent = label + (on ? " ON" : " OFF");
+        b.classList.toggle("rb2-relay-on", on);
+        b.classList.toggle("rb2-relay-off", !on);
+      }
+    } catch(e) {
+      console.log("Erreur relais:", e);
+      if (b) b.textContent = label + " ?";
+    }
+
+    return false;
+  }
+
+  async function takePhoto(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    var b = document.getElementById("photoBtn");
+    if (!b) return false;
+
+    b.classList.remove("photo-error");
+    b.classList.add("photo-flash");
+    b.textContent = "PHOTO...";
+
+    try {
+      await fetchJson("/zero_photo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      }, 15000);
+
+      b.textContent = "PHOTO OK";
+      b.classList.add("photo-flash");
+      b.classList.remove("photo-error");
+    } catch(e) {
+      console.log("Erreur photo:", e);
+      b.textContent = "PHOTO ERREUR";
+      b.classList.remove("photo-flash");
+      b.classList.add("photo-error");
+    }
+
+    setTimeout(function() {
+      b.textContent = "PHOTO";
+      b.classList.remove("photo-flash");
+      b.classList.remove("photo-error");
+    }, 1200);
+
+    return false;
+  }
+
+  async function updateVideoStatus() {
+    var b = document.getElementById("videoBtn");
+    if (!b) return;
+
+    try {
+      var j = await fetchJson("/zero_video_status", { method: "GET" }, 5000);
+      videoOn = !!(j.recording || j.video_on || j.active || j.on);
+
+      if (videoOn) {
+        b.textContent = "ENREG.";
+        b.classList.add("video-active");
+        b.classList.remove("orange");
+        b.classList.remove("photo-error");
+      } else {
+        b.textContent = "VIDÉO";
+        b.classList.remove("video-active");
+        b.classList.remove("photo-error");
+        b.classList.add("orange");
+      }
+    } catch(e) {
+      console.log("État vidéo inconnu:", e);
+      b.textContent = "VIDÉO ?";
+    }
+  }
+
+  async function toggleVideo(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    var b = document.getElementById("videoBtn");
+    if (b) b.textContent = videoOn ? "ARRÊT..." : "VIDÉO...";
+
+    try {
+      await fetchJson("/zero_video_toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      }, 15000);
+
+      setTimeout(updateVideoStatus, 500);
+    } catch(e) {
+      console.log("Erreur vidéo:", e);
+      if (b) {
+        b.textContent = "VIDÉO ERREUR";
+        b.classList.remove("video-active");
+        b.classList.add("photo-error");
+      }
+      setTimeout(updateVideoStatus, 1500);
+    }
+
+    return false;
+  }
+
+  function openCaptures(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+    window.open("/captures", "_blank");
+    return false;
+  }
+
+  async function restartCamera(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    var b = ev && ev.currentTarget ? ev.currentTarget : null;
+    if (b) b.textContent = "RESTART...";
+
+    try {
+      try {
+        await fetchJson("/zero_cam_restart", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        }, 12000);
+      } catch(ePost) {
+        await fetchJson("/zero_cam_restart", { method: "GET" }, 12000);
+      }
+
+      if (b) b.textContent = "RESTART CAMÉRA";
+    } catch(e) {
+      console.log("Erreur restart caméra:", e);
+      if (b) b.textContent = "ERREUR CAMÉRA";
+      setTimeout(function() {
+        if (b) b.textContent = "RESTART CAMÉRA";
+      }, 1500);
+    }
+
+    return false;
+  }
+
+  async function shutdownRB2(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (!confirm("Éteindre RB2 maintenant ?")) return false;
+    if (!confirm("Confirmation finale : arrêter RB2 ?")) return false;
+
+    var b = document.getElementById("rb2ShutdownBtn");
+    if (b) {
+      b.textContent = "ARRÊT...";
+      b.disabled = true;
+    }
+
+    try {
+      await fetchJson("/rb2_poweroff", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      }, 8000);
+
+      if (b) b.textContent = "ARRÊT DEMANDÉ";
+    } catch(e) {
+      console.log("Erreur arrêt RB2:", e);
+      if (b) {
+        b.textContent = "ERREUR ARRÊT";
+        b.disabled = false;
+      }
+    }
+
+    return false;
+  }
+
+  function bindButton(el, eventName, fn) {
+    if (!el) return;
+    el.addEventListener(eventName, fn, true);
+  }
+
+  function bindByText(matchFn, fn) {
+    document.querySelectorAll("button").forEach(function(b) {
+      var txt = (b.textContent || "").trim().toUpperCase();
+      if (matchFn(txt, b)) bindButton(b, "click", fn);
+    });
+  }
+
+  async function bindAll() {
+    await initSeq();
+
+    // Moteurs
+    document.querySelectorAll("#drivePad .drive-btn").forEach(function(b) {
+      var label = (b.dataset.label || b.textContent || "").trim().toLowerCase();
+
+      if (label.indexOf("avance") >= 0) label = "avance";
+      else if (label.indexOf("recul") >= 0) label = "recul";
+      else if (label.indexOf("gauche") >= 0) label = "gauche";
+      else if (label.indexOf("droite") >= 0) label = "droite";
+      else if (label.indexOf("stop") >= 0) label = "stop";
+
+      if (label === "stop") {
+        bindButton(b, "pointerdown", function(ev) { return stopDrive(ev); });
+        bindButton(b, "click", function(ev) { return stopDrive(ev); });
+      } else {
+        bindButton(b, "pointerdown", function(ev) { return startDrive(label, ev); });
+        bindButton(b, "pointerup", function(ev) { return stopDrive(ev); });
+        bindButton(b, "pointerleave", function(ev) { return stopDrive(ev); });
+        bindButton(b, "pointercancel", function(ev) { return stopDrive(ev); });
+        bindButton(b, "click", function(ev) {
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          return false;
+        });
+      }
+    });
+
+    // Vitesses
+    [[25, "speed25"], [50, "speed50"], [75, "speed75"], [100, "speed100"]].forEach(function(x) {
+      var b = document.getElementById(x[1]);
+      bindButton(b, "click", function(ev) { return setSpeed(x[0], ev); });
+    });
+    setSpeed(100);
+
+    // Pan/Tilt par texte/symboles
+    document.querySelectorAll(".pt-grid button").forEach(function(b) {
+      var txt = (b.textContent || "").trim();
+
+      if (txt === "▲" || txt.indexOf("▲") >= 0) bindButton(b, "click", tiltUp);
+      else if (txt === "▼" || txt.indexOf("▼") >= 0) bindButton(b, "click", tiltDown);
+      else if (txt === "◀" || txt.indexOf("◀") >= 0 || txt === "◄") bindButton(b, "click", panLeft);
+      else if (txt === "▶" || txt.indexOf("▶") >= 0 || txt === "►") bindButton(b, "click", panRight);
+    });
+
+    bindByText(function(txt) { return txt === "CENTRE"; }, centerPT);
+    bindByText(function(txt) { return txt === "T 145" || txt === "T145"; }, function(ev) { return setTilt(145, ev); });
+    bindByText(function(txt) { return txt === "T 68" || txt === "T68"; }, function(ev) { return setTilt(68, ev); });
+
+    updatePT();
+
+    // Relais
+    bindButton(document.getElementById("rb2LightBtn"), "click", function(ev) { return toggleRelay("light", ev); });
+    bindButton(document.getElementById("rb2Relay2Btn"), "click", function(ev) { return toggleRelay("relay2", ev); });
+
+    // Caméra / captures
+    bindButton(document.getElementById("photoBtn"), "click", takePhoto);
+    bindButton(document.getElementById("videoBtn"), "click", toggleVideo);
+    bindButton(document.getElementById("capturesBtn"), "click", openCaptures);
+
+    bindByText(function(txt) { return txt.indexOf("RESTART") >= 0 && txt.indexOf("CAM") >= 0; }, restartCamera);
+
+    // Arrêt RB2
+    bindButton(document.getElementById("rb2ShutdownBtn"), "click", shutdownRB2);
+
+    updateVideoStatus();
+
+    console.log("Terrain2 force-active chargé.");
+  }
+
+  // Exposer aussi les fonctions pour les anciens onclick.
+  window.rb2DriveLabel = startDrive;
+  window.rb2DriveStop = stopDrive;
+  window.setDriveSpeed = setSpeed;
+  window.updateDriveButtonSpeeds = function(){};
+  window.rb2ToggleRelay = toggleRelay;
+  window.takePhoto = takePhoto;
+  window.toggleVideo = toggleVideo;
+  window.updateVideoStatus = updateVideoStatus;
+  window.openCaptures = openCaptures;
+  window.panLeft = panLeft;
+  window.panRight = panRight;
+  window.tiltUp = tiltUp;
+  window.tiltDown = tiltDown;
+  window.setPanTilt = function(p, t) { pan = p; tilt = t; sendPT(); };
+  window.setTiltOnly = function(t) { tilt = t; sendPT(); };
+  window.rb2Terrain2Shutdown = shutdownRB2;
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bindAll);
+  } else {
+    bindAll();
+  }
+})();
+</script>
+<!-- TERRAIN2 FORCE-ACTIVE END -->
+
+
+<!-- TERRAIN2 FIX MOTEURS RELAIS CAMERA START -->
+<script>
+(function() {
+  let serverOffsetMs = 0;
+  let seq = Date.now();
+  let speed = 20;
+  let driveTimer = null;
+
+  async function rb2Json(path, options = {}, timeoutMs = 8000) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
+    try {
+      const r = await fetch(path, Object.assign({}, options, {
+        signal: ctrl.signal,
+        cache: "no-store"
+      }));
+
+      const text = await r.text();
+      let j = {};
+      try { j = text ? JSON.parse(text) : {}; }
+      catch(e) { j = { raw: text }; }
+
+      if (!r.ok) {
+        throw new Error(path + " HTTP " + r.status + " " + text.slice(0, 120));
+      }
+
+      return j;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  function rb2NowMs() {
+    return Date.now() + serverOffsetMs;
+  }
+
+  function rb2NextSeq() {
+    const n = rb2NowMs();
+    seq = Math.max(seq + 1, n);
+    return seq;
+  }
+
+  async function rb2InitTiming() {
+    try {
+      const j = await rb2Json("/drive_time", { method: "GET" }, 3000);
+      if (j && Number.isFinite(Number(j.server_ms))) {
+        const serverMs = Number(j.server_ms);
+        serverOffsetMs = serverMs - Date.now();
+        seq = serverMs;
+      }
+    } catch(e) {
+      serverOffsetMs = 0;
+      seq = Date.now();
+    }
+  }
+
+  function motorPayload(cmd) {
+    const ts = rb2NowMs();
+    const s = rb2NextSeq();
+
+    /*
+      Le serveur a refusé "timestamp absent".
+      On envoie donc plusieurs noms compatibles.
+      Les champs inconnus seront simplement ignorés.
+    */
+    return {
+      cmd: cmd,
+      drive_seq: s,
+      timestamp: ts,
+      timestamp_ms: ts,
+      time_ms: ts,
+      client_ms: ts,
+      client_time_ms: ts,
+      server_ms: ts,
+      drive_token: "terrain"
+    };
+  }
+
+  async function sendMotor(cmd) {
+    try {
+      const j = await rb2Json("/cmd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(motorPayload(cmd))
+      }, 4000);
+
+      const d = document.getElementById("driveStatus");
+      if (d) d.textContent = (cmd === "d0,0" || cmd === "s") ? "arrêt" : cmd;
+
+      if (j && j.ok === false) {
+        console.log("Moteur refusé:", j);
+      }
+
+      return j;
+    } catch(e) {
+      console.log("Erreur moteur:", e);
+      const d = document.getElementById("driveStatus");
+      if (d) d.textContent = "erreur moteur";
+    }
+  }
+
+  function cmdForLabel(label) {
+    const v = speed || 20;
+
+    if (label === "avance") return "d" + v + "," + v;
+    if (label === "recul") return "d-" + v + ",-" + v;
+    if (label === "gauche") return "d-" + v + "," + v;
+    if (label === "droite") return "d" + v + ",-" + v;
+
+    return "d0,0";
+  }
+
+  function startDrive(label, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    stopDrive(null, false);
+
+    const cmd = cmdForLabel(label);
+    sendMotor(cmd);
+
+    driveTimer = setInterval(function() {
+      sendMotor(cmd);
+    }, 300);
+
+    return false;
+  }
+
+  function stopDrive(ev, blockEvent = true) {
+    if (ev && blockEvent) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (driveTimer) {
+      clearInterval(driveTimer);
+      driveTimer = null;
+    }
+
+    sendMotor("d0,0");
+    return false;
+  }
+
+  function setSpeed(percent, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (percent === 25) speed = 15;
+    else if (percent === 50) speed = 17;
+    else if (percent === 75) speed = 19;
+    else speed = 20;
+
+    document.querySelectorAll(".speed-btn").forEach(function(b) {
+      b.classList.remove("speed-active");
+    });
+
+    const active = document.getElementById("speed" + percent);
+    if (active) active.classList.add("speed-active");
+
+    return false;
+  }
+
+  function relayIsOn(j) {
+    const v = j.state ?? j.on ?? j.active ?? j.enabled ?? j.value;
+
+    if (typeof v === "string") {
+      return ["on", "true", "1", "yes", "oui"].includes(v.toLowerCase());
+    }
+
+    return !!v;
+  }
+
+  async function setRelayState(which, state) {
+    const path = which === "relay2" ? "/relay2" : "/light";
+
+    try {
+      return await rb2Json(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: state })
+      }, 5000);
+    } catch(e1) {
+      // Fallback au cas où la route attend un formulaire.
+      return await rb2Json(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "state=" + encodeURIComponent(state)
+      }, 5000);
+    }
+  }
+
+  async function toggleRelay(which, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    const path = which === "relay2" ? "/relay2" : "/light";
+    const btnId = which === "relay2" ? "rb2Relay2Btn" : "rb2LightBtn";
+    const label = which === "relay2" ? "RELAIS 2" : "LUMIÈRES";
+    const b = document.getElementById(btnId);
+
+    if (b) b.textContent = label + " ...";
+
+    try {
+      const current = await rb2Json(path, { method: "GET" }, 4000);
+      const target = relayIsOn(current) ? "off" : "on";
+
+      const j = await setRelayState(which, target);
+      const on = relayIsOn(j);
+
+      if (b) {
+        b.textContent = label + (on ? " ON" : " OFF");
+        b.classList.toggle("rb2-relay-on", on);
+        b.classList.toggle("rb2-relay-off", !on);
+      }
+    } catch(e) {
+      console.log("Erreur " + label + ":", e);
+      if (b) b.textContent = label + " ?";
+    }
+
+    return false;
+  }
+
+  function openCamera(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    window.open("/zero_cam_stream.mjpg?ts=" + Date.now(), "_blank");
+    return false;
+  }
+
+  function bindCleanButton(selector, binder) {
+    document.querySelectorAll(selector).forEach(function(oldBtn) {
+      const btn = oldBtn.cloneNode(true);
+      oldBtn.parentNode.replaceChild(btn, oldBtn);
+      binder(btn);
+    });
+  }
+
+  async function bindTerrain2Fix() {
+    await rb2InitTiming();
+
+    // Moteurs : on clone pour enlever les anciens écouteurs qui envoyaient sans timestamp.
+    bindCleanButton("#drivePad .drive-btn", function(btn) {
+      let label = (btn.dataset.label || btn.textContent || "").trim().toLowerCase();
+
+      if (label.includes("avance")) label = "avance";
+      else if (label.includes("recul")) label = "recul";
+      else if (label.includes("gauche")) label = "gauche";
+      else if (label.includes("droite")) label = "droite";
+      else if (label.includes("stop")) label = "stop";
+
+      if (label === "stop") {
+        btn.addEventListener("pointerdown", function(ev) { return stopDrive(ev); }, true);
+        btn.addEventListener("click", function(ev) { return stopDrive(ev); }, true);
+      } else {
+        btn.addEventListener("pointerdown", function(ev) { return startDrive(label, ev); }, true);
+        btn.addEventListener("pointerup", function(ev) { return stopDrive(ev); }, true);
+        btn.addEventListener("pointerleave", function(ev) { return stopDrive(ev); }, true);
+        btn.addEventListener("pointercancel", function(ev) { return stopDrive(ev); }, true);
+        btn.addEventListener("click", function(ev) {
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          return false;
+        }, true);
+      }
+    });
+
+    // Vitesses
+    [
+      [25, "#speed25"],
+      [50, "#speed50"],
+      [75, "#speed75"],
+      [100, "#speed100"]
+    ].forEach(function(x) {
+      const b = document.querySelector(x[1]);
+      if (b) {
+        b.onclick = null;
+        b.addEventListener("click", function(ev) { return setSpeed(x[0], ev); }, true);
+      }
+    });
+
+    setSpeed(100);
+
+    // Lumières / Relais 2 : on clone aussi pour enlever les anciens gestionnaires.
+    bindCleanButton("#rb2LightBtn", function(btn) {
+      btn.addEventListener("click", function(ev) { return toggleRelay("light", ev); }, true);
+    });
+
+    bindCleanButton("#rb2Relay2Btn", function(btn) {
+      btn.addEventListener("click", function(ev) { return toggleRelay("relay2", ev); }, true);
+    });
+
+    // Caméra directe
+    document.querySelectorAll("button").forEach(function(b) {
+      const txt = (b.textContent || "").trim().toUpperCase();
+      if (txt.includes("CAMÉRA DIRECTE") || txt.includes("CAMERA DIRECTE")) {
+        b.onclick = null;
+        b.addEventListener("click", openCamera, true);
+      }
+    });
+
+    console.log("terrain2 fix moteurs/relais/camera chargé");
+  }
+
+  // Fonctions globales pour les anciens onclick encore présents.
+  window.setDriveSpeed = setSpeed;
+  window.updateDriveButtonSpeeds = function(){};
+  window.rb2ToggleRelay = toggleRelay;
+  window.openCamera = openCamera;
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bindTerrain2Fix);
+  } else {
+    bindTerrain2Fix();
+  }
+})();
+</script>
+<!-- TERRAIN2 FIX MOTEURS RELAIS CAMERA END -->
+
+
+<!-- TERRAIN2 FIX SENT_SERVER_MS TILT START -->
+<script>
+(function() {
+  let serverOffsetMs = 0;
+  let seq = Date.now();
+  let speed = 20;
+  let driveTimer = null;
+  let pan = 95;
+  let tilt = 90;
+
+  async function jfetch(path, options = {}, timeoutMs = 5000) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(path, Object.assign({}, options, {
+        signal: ctrl.signal,
+        cache: "no-store"
+      }));
+      const text = await r.text();
+      let j = {};
+      try { j = text ? JSON.parse(text) : {}; }
+      catch(e) { j = { raw: text }; }
+      if (!r.ok) throw new Error(path + " HTTP " + r.status + " " + text.slice(0, 100));
+      return j;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  async function initTime() {
+    try {
+      const j = await jfetch("/drive_time", { method: "GET" }, 3000);
+      const serverMs = Number(j.server_ms);
+      if (Number.isFinite(serverMs)) {
+        serverOffsetMs = serverMs - Date.now();
+        seq = serverMs;
+      }
+    } catch(e) {
+      serverOffsetMs = 0;
+      seq = Date.now();
+    }
+  }
+
+  function nowServerMs() {
+    return Math.round(Date.now() + serverOffsetMs);
+  }
+
+  function nextSeq() {
+    const n = nowServerMs();
+    seq = Math.max(seq + 1, n);
+    return seq;
+  }
+
+  async function sendDrive(cmd) {
+    const sent = nowServerMs();
+    const payload = {
+      cmd: cmd,
+      drive_seq: nextSeq(),
+      sent_server_ms: sent,
+      drive_token: "terrain"
+    };
+
+    try {
+      const j = await jfetch("/cmd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }, 4000);
+
+      const d = document.getElementById("driveStatus");
+      if (d) d.textContent = (cmd === "d0,0") ? "arrêt" : cmd;
+
+      if (j && j.ok === false) console.log("Moteur refusé:", j);
+      return j;
+    } catch(e) {
+      console.log("Erreur moteur:", e);
+      const d = document.getElementById("driveStatus");
+      if (d) d.textContent = "erreur moteur";
+    }
+  }
+
+  function cmdFor(label) {
+    const v = speed || 20;
+    if (label === "avance") return "d" + v + "," + v;
+    if (label === "recul") return "d-" + v + ",-" + v;
+    if (label === "gauche") return "d-" + v + "," + v;
+    if (label === "droite") return "d" + v + ",-" + v;
+    return "d0,0";
+  }
+
+  function startDrive(label, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (driveTimer) {
+      clearInterval(driveTimer);
+      driveTimer = null;
+    }
+
+    const cmd = cmdFor(label);
+    sendDrive(cmd);
+
+    driveTimer = setInterval(function() {
+      sendDrive(cmd);
+    }, 300);
+
+    return false;
+  }
+
+  function stopDrive(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (driveTimer) {
+      clearInterval(driveTimer);
+      driveTimer = null;
+    }
+
+    sendDrive("d0,0");
+    return false;
+  }
+
+  function setSpeed(percent, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (percent === 25) speed = 15;
+    else if (percent === 50) speed = 17;
+    else if (percent === 75) speed = 19;
+    else speed = 20;
+
+    document.querySelectorAll(".speed-btn").forEach(function(b) {
+      b.classList.remove("speed-active");
+    });
+
+    const active = document.getElementById("speed" + percent);
+    if (active) active.classList.add("speed-active");
+
+    return false;
+  }
+
+  async function sendPT(cmd) {
+    try {
+      await jfetch("/cmd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cmd: cmd })
+      }, 3000);
+    } catch(e) {
+      console.log("Erreur pan/tilt:", cmd, e);
+    }
+  }
+
+  function updatePT() {
+    if (pan < 60) pan = 60;
+    if (pan > 135) pan = 135;
+    if (tilt < 68) tilt = 68;
+    if (tilt > 145) tilt = 145;
+
+    const p = document.getElementById("panValue");
+    const t = document.getElementById("tiltValue");
+
+    if (p) p.textContent = String(pan);
+    if (t) t.textContent = String(tilt);
+  }
+
+  function doPan(delta, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    pan += delta;
+    updatePT();
+    sendPT("p" + pan);
+    return false;
+  }
+
+  function doTilt(delta, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    tilt += delta;
+    updatePT();
+    sendPT("t" + tilt);
+    return false;
+  }
+
+  function doCenter(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    pan = 95;
+    tilt = 90;
+    updatePT();
+    sendPT("p95");
+    setTimeout(function() { sendPT("t90"); }, 150);
+    return false;
+  }
+
+  function setTiltValue(v, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    tilt = v;
+    updatePT();
+    sendPT("t" + tilt);
+    return false;
+  }
+
+  function cloneBind(selector, binder) {
+    document.querySelectorAll(selector).forEach(function(oldEl) {
+      const el = oldEl.cloneNode(true);
+      oldEl.parentNode.replaceChild(el, oldEl);
+      binder(el);
+    });
+  }
+
+  async function bind() {
+    await initTime();
+
+    cloneBind("#drivePad .drive-btn", function(btn) {
+      let label = (btn.dataset.label || btn.textContent || "").trim().toLowerCase();
+
+      if (label.includes("avance")) label = "avance";
+      else if (label.includes("recul")) label = "recul";
+      else if (label.includes("gauche")) label = "gauche";
+      else if (label.includes("droite")) label = "droite";
+      else if (label.includes("stop")) label = "stop";
+
+      if (label === "stop") {
+        btn.addEventListener("pointerdown", stopDrive, true);
+        btn.addEventListener("click", stopDrive, true);
+      } else {
+        btn.addEventListener("pointerdown", function(ev) { return startDrive(label, ev); }, true);
+        btn.addEventListener("pointerup", stopDrive, true);
+        btn.addEventListener("pointerleave", stopDrive, true);
+        btn.addEventListener("pointercancel", stopDrive, true);
+        btn.addEventListener("click", function(ev) {
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          return false;
+        }, true);
+      }
+    });
+
+    [[25,"speed25"], [50,"speed50"], [75,"speed75"], [100,"speed100"]].forEach(function(x) {
+      const b = document.getElementById(x[1]);
+      if (b) {
+        b.onclick = null;
+        b.addEventListener("click", function(ev) { return setSpeed(x[0], ev); }, true);
+      }
+    });
+
+    setSpeed(100);
+
+    cloneBind(".pt-grid button", function(btn) {
+      const txt = (btn.textContent || "").trim();
+
+      if (txt.includes("◀") || txt.includes("◄")) {
+        btn.addEventListener("click", function(ev) { return doPan(-5, ev); }, true);
+      } else if (txt.includes("▶") || txt.includes("►")) {
+        btn.addEventListener("click", function(ev) { return doPan(5, ev); }, true);
+      } else if (txt.includes("▲")) {
+        btn.addEventListener("click", function(ev) { return doTilt(5, ev); }, true);
+      } else if (txt.includes("▼")) {
+        btn.addEventListener("click", function(ev) { return doTilt(-5, ev); }, true);
+      }
+    });
+
+    cloneBind(".small-row button", function(btn) {
+      const txt = (btn.textContent || "").trim().toUpperCase().replace(/\s+/g, "");
+
+      if (txt === "CENTRE") {
+        btn.addEventListener("click", doCenter, true);
+      } else if (txt === "T145") {
+        btn.addEventListener("click", function(ev) { return setTiltValue(145, ev); }, true);
+      } else if (txt === "T68") {
+        btn.addEventListener("click", function(ev) { return setTiltValue(68, ev); }, true);
+      }
+    });
+
+    updatePT();
+    console.log("terrain2 sent_server_ms + tilt actif");
+  }
+
+  window.setDriveSpeed = setSpeed;
+  window.updateDriveButtonSpeeds = function(){};
+
+  window.panLeft = function() { return doPan(-5); };
+  window.panRight = function() { return doPan(5); };
+  window.tiltUp = function() { return doTilt(5); };
+  window.tiltDown = function() { return doTilt(-5); };
+  window.setPanTilt = function(p, t) {
+    pan = p;
+    tilt = t;
+    updatePT();
+    sendPT("p" + pan);
+    setTimeout(function() { sendPT("t" + tilt); }, 150);
+  };
+  window.setTiltOnly = function(t) {
+    tilt = t;
+    updatePT();
+    sendPT("t" + tilt);
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bind);
+  } else {
+    bind();
+  }
+})();
+</script>
+<!-- TERRAIN2 FIX SENT_SERVER_MS TILT END -->
+
+
+<!-- TERRAIN2 MOTOR OVERRIDE FINAL START -->
+<script>
+(function() {
+  let serverOffsetMs = 0;
+  let driveSeq = Date.now();
+  let driveSpeed = 20;
+  let driveRepeat = null;
+
+  async function jfetch(path, options = {}, timeoutMs = 5000) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
+    try {
+      const r = await fetch(path, Object.assign({}, options, {
+        signal: ctrl.signal,
+        cache: "no-store"
+      }));
+
+      const text = await r.text();
+      let j = {};
+      try { j = text ? JSON.parse(text) : {}; }
+      catch(e) { j = { raw: text }; }
+
+      if (!r.ok) {
+        throw new Error(path + " HTTP " + r.status + " " + text.slice(0, 100));
+      }
+
+      return j;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  async function syncDriveTime() {
+    try {
+      const j = await jfetch("/drive_time", { method: "GET" }, 2500);
+      const serverMs = Number(j.server_ms);
+      if (Number.isFinite(serverMs)) {
+        serverOffsetMs = serverMs - Date.now();
+        driveSeq = serverMs;
+      }
+    } catch(e) {
+      serverOffsetMs = 0;
+      driveSeq = Date.now();
+    }
+  }
+
+  function serverNowMs() {
+    return Math.round(Date.now() + serverOffsetMs);
+  }
+
+  function nextSeq() {
+    const n = serverNowMs();
+    driveSeq = Math.max(driveSeq + 1, n);
+    return driveSeq;
+  }
+
+  function cmdFor(label) {
+    const v = driveSpeed || 20;
+
+    if (label === "avance") return "d" + v + "," + v;
+    if (label === "recul") return "d-" + v + ",-" + v;
+    if (label === "gauche") return "d-" + v + "," + v;
+    if (label === "droite") return "d" + v + ",-" + v;
+
+    return "d0,0";
+  }
+
+  async function sendDrive(cmd) {
+    const sent = serverNowMs();
+
+    const payload = {
+      cmd: cmd,
+      drive_seq: nextSeq(),
+      sent_server_ms: sent,
+      drive_token: "terrain"
+    };
+
+    try {
+      const j = await jfetch("/cmd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }, 4000);
+
+      const d = document.getElementById("driveStatus");
+      if (d) d.textContent = (cmd === "d0,0") ? "arrêt" : cmd;
+
+      if (j && j.ok === false) {
+        console.log("MOTEUR refusé:", j);
+      } else {
+        console.log("MOTEUR envoyé:", payload);
+      }
+
+      return j;
+    } catch(e) {
+      console.log("Erreur moteur:", e);
+      const d = document.getElementById("driveStatus");
+      if (d) d.textContent = "erreur moteur";
+    }
+  }
+
+  function stopDrive(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (driveRepeat) {
+      clearInterval(driveRepeat);
+      driveRepeat = null;
+    }
+
+    sendDrive("d0,0");
+    return false;
+  }
+
+  function startDrive(label, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (driveRepeat) {
+      clearInterval(driveRepeat);
+      driveRepeat = null;
+    }
+
+    const cmd = cmdFor(label);
+
+    sendDrive(cmd);
+
+    driveRepeat = setInterval(function() {
+      sendDrive(cmd);
+    }, 300);
+
+    return false;
+  }
+
+  function setSpeed(percent, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+
+    if (percent === 25) driveSpeed = 15;
+    else if (percent === 50) driveSpeed = 17;
+    else if (percent === 75) driveSpeed = 19;
+    else driveSpeed = 20;
+
+    document.querySelectorAll(".speed-btn").forEach(function(b) {
+      b.classList.remove("speed-active");
+    });
+
+    const active = document.getElementById("speed" + percent);
+    if (active) active.classList.add("speed-active");
+
+    return false;
+  }
+
+  function bindMotorsNow() {
+    const pad = document.getElementById("drivePad");
+    if (!pad) return;
+
+    // Remplace complètement les boutons moteurs pour enlever les anciens listeners.
+    pad.querySelectorAll(".drive-btn").forEach(function(oldBtn) {
+      const btn = oldBtn.cloneNode(true);
+      oldBtn.parentNode.replaceChild(btn, oldBtn);
+
+      let label = (btn.dataset.label || btn.textContent || "").trim().toLowerCase();
+
+      if (label.includes("avance")) label = "avance";
+      else if (label.includes("recul")) label = "recul";
+      else if (label.includes("gauche")) label = "gauche";
+      else if (label.includes("droite")) label = "droite";
+      else if (label.includes("stop")) label = "stop";
+
+      btn.removeAttribute("onclick");
+      btn.removeAttribute("onpointerdown");
+      btn.removeAttribute("onpointerup");
+      btn.removeAttribute("onpointerleave");
+      btn.removeAttribute("onpointercancel");
+
+      if (label === "stop") {
+        btn.addEventListener("pointerdown", stopDrive, true);
+        btn.addEventListener("click", stopDrive, true);
+      } else {
+        btn.addEventListener("pointerdown", function(ev) {
+          return startDrive(label, ev);
+        }, true);
+
+        btn.addEventListener("pointerup", stopDrive, true);
+        btn.addEventListener("pointerleave", stopDrive, true);
+        btn.addEventListener("pointercancel", stopDrive, true);
+
+        // Sécurité : un clic très court donne une impulsion visible de 500 ms.
+        btn.addEventListener("click", function(ev) {
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+
+          const cmd = cmdFor(label);
+          sendDrive(cmd);
+          setTimeout(function() {
+            sendDrive("d0,0");
+          }, 500);
+
+          return false;
+        }, true);
+      }
+    });
+
+    // Vitesses
+    [
+      [25, "speed25"],
+      [50, "speed50"],
+      [75, "speed75"],
+      [100, "speed100"]
+    ].forEach(function(x) {
+      const b = document.getElementById(x[1]);
+      if (!b) return;
+
+      b.onclick = null;
+
+      const clone = b.cloneNode(true);
+      b.parentNode.replaceChild(clone, b);
+
+      clone.addEventListener("click", function(ev) {
+        return setSpeed(x[0], ev);
+      }, true);
+    });
+
+    setSpeed(100);
+
+    console.log("terrain2 moteurs FINAL liés avec sent_server_ms");
+  }
+
+  async function initMotorOverride() {
+    await syncDriveTime();
+
+    // Une première fois.
+    bindMotorsNow();
+
+    // Puis deux reprises retardées pour gagner contre les vieux scripts encore présents.
+    setTimeout(bindMotorsNow, 700);
+    setTimeout(bindMotorsNow, 1500);
+  }
+
+  window.rb2Terrain2MotorFinalBind = bindMotorsNow;
+  window.setDriveSpeed = setSpeed;
+  window.updateDriveButtonSpeeds = function(){};
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initMotorOverride);
+  } else {
+    initMotorOverride();
+  }
+})();
+</script>
+<!-- TERRAIN2 MOTOR OVERRIDE FINAL END -->
+
+
+<!-- TERRAIN2 LIDAR DISPLAY FIX START -->
+<script>
+(function() {
+  if (window.__RB2_TERRAIN2_LIDAR_FIX__) return;
+  window.__RB2_TERRAIN2_LIDAR_FIX__ = true;
+
+  let rb2Terrain2LidarZoom = 1.0;
+  let rb2Terrain2ShowDistances = false;
+
+  async function jfetch(path, timeoutMs) {
+    timeoutMs = timeoutMs || 3000;
+    const ctrl = new AbortController();
+    const t = setTimeout(function() { ctrl.abort(); }, timeoutMs);
+
+    try {
+      const r = await fetch(path, {
+        method: "GET",
+        signal: ctrl.signal,
+        cache: "no-store"
+      });
+
+      const text = await r.text();
+      let j = {};
+      try { j = text ? JSON.parse(text) : {}; }
+      catch(e) { j = { raw: text }; }
+
+      if (!r.ok) throw new Error(path + " HTTP " + r.status);
+      return j;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  function setText(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (value === undefined || value === null || Number.isNaN(value)) {
+      el.textContent = "---";
+      return;
+    }
+
+    if (typeof value === "number") {
+      el.textContent = value.toFixed(1);
+    } else {
+      el.textContent = String(value);
+    }
+  }
+
+  function drawLidarTerrain2(points, clearance) {
+    const canvas = document.getElementById("lidarCanvas");
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const w = canvas.width || canvas.clientWidth || 900;
+    const h = canvas.height || canvas.clientHeight || 620;
+
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Fond
+    ctx.fillStyle = "#050505";
+    ctx.fillRect(0, 0, w, h);
+
+    // Centre robot
+    const cx = w / 2;
+    const cy = h * 0.58;
+
+    // Échelle : environ 1.8 px par cm, ajustable.
+    const scale = (Math.min(w, h) / 180) * rb2Terrain2LidarZoom;
+
+    // Grille
+    ctx.strokeStyle = "#1f2937";
+    ctx.lineWidth = 1;
+
+    [25, 50, 75, 100, 125, 150].forEach(function(cm) {
+      const radius = cm * scale;
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      if (rb2Terrain2ShowDistances) {
+        ctx.fillStyle = "#d1d5db";
+        ctx.font = "12px sans-serif";
+        ctx.fillText(cm + " cm", cx + radius + 4, cy - 4);
+        ctx.fillStyle = "#22c55e";
+      }
+    });
+
+    // Axes
+    ctx.strokeStyle = "#374151";
+    ctx.lineWidth = 1;
+
+    ctx.beginPath();
+    ctx.moveTo(cx, 10);
+    ctx.lineTo(cx, h - 10);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(10, cy);
+    ctx.lineTo(w - 10, cy);
+    ctx.stroke();
+
+    // Points LIDAR
+    if (Array.isArray(points) && points.length > 0) {
+      ctx.fillStyle = "#22c55e";
+
+      for (const pt of points) {
+        if (!Array.isArray(pt) || pt.length < 2) continue;
+
+        const xcm = Number(pt[0]);
+        const ycm = Number(pt[1]);
+
+        if (!Number.isFinite(xcm) || !Number.isFinite(ycm)) continue;
+
+        // Convention affichage : x horizontal, y vers l'avant.
+        const x = cx + xcm * scale;
+        const y = cy - ycm * scale;
+
+        if (x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
+
+        ctx.beginPath();
+        ctx.arc(x, y, 2.0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Robot approximatif
+    ctx.fillStyle = "rgba(59,130,246,0.35)";
+    ctx.strokeStyle = "#60a5fa";
+    ctx.lineWidth = 2;
+
+    const robotW = 20 * scale;
+    const robotFront = 28 * scale;
+    const robotBack = 10 * scale;
+
+    ctx.beginPath();
+    ctx.rect(cx - robotW / 2, cy - robotFront, robotW, robotFront + robotBack);
+    ctx.fill();
+    ctx.stroke();
+
+    // Flèche avant
+    ctx.fillStyle = "#60a5fa";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - robotFront - 12);
+    ctx.lineTo(cx - 8, cy - robotFront + 4);
+    ctx.lineTo(cx + 8, cy - robotFront + 4);
+    ctx.closePath();
+    ctx.fill();
+
+    // Texte résumé dans le canvas
+    ctx.fillStyle = "#e5e7eb";
+    ctx.font = "14px sans-serif";
+    ctx.fillText("Avant", cx + 8, 22);
+
+    if (clearance) {
+      ctx.font = "13px sans-serif";
+      const f = clearance.front_cm;
+      const b = clearance.back_cm;
+      const l = clearance.left_cm;
+      const r = clearance.right_cm;
+      const m = clearance.min_cm;
+
+      ctx.fillText(
+        "F " + fmt(f) + "  D " + fmt(r) + "  G " + fmt(l) + "  A " + fmt(b) + "  min " + fmt(m),
+        12,
+        h - 14
+      );
+    }
+  }
+
+  function fmt(v) {
+    v = Number(v);
+    if (!Number.isFinite(v)) return "---";
+    return v.toFixed(1);
+  }
+
+  async function updateDistancesTerrain2() {
+    try {
+      const j = await jfetch("/lidar", 3000);
+      const d = j.data || j;
+
+      setText("lidarFront", d.front_cm ?? d.clearance?.front_cm);
+      setText("lidarRight", d.right_cm ?? d.clearance?.right_cm);
+      setText("lidarLeft", d.left_cm ?? d.clearance?.left_cm);
+      setText("lidarBack", d.back_cm ?? d.clearance?.back_cm);
+      setText("lidarMin", d.min_cm ?? d.clearance?.min_cm);
+
+      if (j.age_s !== undefined) {
+        setText("lidarAge", Number(j.age_s));
+      } else {
+        setText("lidarAge", 0);
+      }
+
+      setText("lidarState", "OK");
+    } catch(e) {
+      console.log("Erreur distances LIDAR terrain2:", e);
+      setText("lidarState", "erreur");
+    }
+  }
+
+  async function updateMapTerrain2() {
+    try {
+      const j = await jfetch("/lidar_map", 3000);
+      const d = j.data || j;
+
+      const points = d.points_cm || j.points_cm || [];
+      const clearance = d.clearance || j.clearance || null;
+
+      drawLidarTerrain2(points, clearance);
+
+      // Si les distances sont aussi présentes dans /lidar_map, les utiliser aussi.
+      if (clearance) {
+        setText("lidarFront", clearance.front_cm);
+        setText("lidarRight", clearance.right_cm);
+        setText("lidarLeft", clearance.left_cm);
+        setText("lidarBack", clearance.back_cm);
+        setText("lidarMin", clearance.min_cm);
+      }
+
+      if (j.age_s !== undefined) {
+        setText("lidarAge", Number(j.age_s));
+      }
+
+      setText("lidarState", "OK");
+    } catch(e) {
+      console.log("Erreur carte LIDAR terrain2:", e);
+      setText("lidarState", "erreur carte");
+    }
+  }
+
+
+  window.rb2Terrain2LidarZoomPlus = function() {
+    rb2Terrain2LidarZoom = Math.min(3.0, rb2Terrain2LidarZoom * 1.25);
+    updateMapTerrain2();
+  };
+
+  window.rb2Terrain2LidarZoomMinus = function() {
+    rb2Terrain2LidarZoom = Math.max(0.35, rb2Terrain2LidarZoom / 1.25);
+    updateMapTerrain2();
+  };
+
+  window.rb2Terrain2LidarToggleDistances = function() {
+    rb2Terrain2ShowDistances = !rb2Terrain2ShowDistances;
+
+    const b = document.getElementById("lidarDistanceToggle");
+    if (b) {
+      b.textContent = rb2Terrain2ShowDistances ? "DISTANCES ON" : "DISTANCES OFF";
+      b.classList.toggle("speed-active", rb2Terrain2ShowDistances);
+    }
+
+    updateMapTerrain2();
+  };
+function startLidarTerrain2() {
+    updateDistancesTerrain2();
+    updateMapTerrain2();
+
+    setInterval(updateDistancesTerrain2, 1000);
+    setInterval(updateMapTerrain2, 800);
+
+    console.log("terrain2 LIDAR display fix actif");
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startLidarTerrain2);
+  } else {
+    startLidarTerrain2();
+  }
+})();
+</script>
+<!-- TERRAIN2 LIDAR DISPLAY FIX END -->
+
+</body>
+</html>
+"""
 @app.route("/secours")
 def rb2_secours_page():
     return """
@@ -5323,7 +9411,7 @@ TERRAIN_HTML = """
       width: 100%;
       aspect-ratio: 4 / 3;
       height: auto;
-      min-height: 420px;
+      min-height: 400px;
       object-fit: contain;
       background: #000;
       border: 2px solid #444;
@@ -5337,7 +9425,7 @@ TERRAIN_HTML = """
       display: block !important;
       width: 100%;
       height: 100%;
-      min-height: 420px;
+      min-height: 400px;
       background: #000;
       border: 2px solid #444;
       border-radius: 8px;
@@ -5349,7 +9437,7 @@ TERRAIN_HTML = """
     #terrainLidarCanvas {
       width: 100%;
       height: 100%;
-      min-height: 420px;
+      min-height: 400px;
       display: block;
       background: #000;
     }
