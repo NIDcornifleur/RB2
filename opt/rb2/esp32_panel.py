@@ -13531,6 +13531,727 @@ def lidar_drive_page():
     return render_template_string(LIDAR_DRIVE_HTML)
 
 
+# === RB2 LIDAR_DRIVE2 BOUTONS SOUS CARTE ===
+
+LIDAR_DRIVE2_BARS_CSS = r"""
+      /* RB2_LD2_HIDE_RIGHT_TITLE_20260706 */
+      body.ld2-page .controls > h2:first-child {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        max-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+      }
+
+      body.ld2-page .map-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      body.ld2-page #lidarCanvas {
+        flex: 1 1 auto;
+        min-height: 0;
+        height: auto;
+      }
+
+      body.ld2-page .map-status {
+        bottom: 88px;
+      }
+
+      .ld2-bars {
+        flex: 0 0 auto;
+        display: grid;
+        grid-template-rows: auto auto;
+        gap: 4px;
+        margin-top: 2px;
+        z-index: 50;
+      }
+
+      .ld2-row {
+        display: grid;
+        grid-template-columns: 96px repeat(7, minmax(0, 1fr));
+        gap: 4px;
+        align-items: stretch;
+      }
+
+      .ld2-row.trace {
+        grid-template-columns: 64px 1.1fr 1.05fr 1.2fr 1fr 1fr 1fr;
+      }
+
+      .ld2-label {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 28px;
+        padding: 3px 5px;
+        border: 1px solid #333;
+        border-radius: 7px;
+        background: #050505;
+        color: #ffffff;
+        font-size: 12px;
+        font-weight: 900;
+        white-space: nowrap;
+      }
+
+      .ld2-btn {
+        min-height: 28px;
+        padding: 4px 6px;
+        border: 1px solid #777;
+        border-radius: 7px;
+        color: #ffffff;
+        font-size: 12px;
+        font-weight: 900;
+        line-height: 1;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .ld2-btn:hover {
+        filter: brightness(1.18);
+      }
+
+      .ld2-green { background: #086625; }
+      .ld2-blue { background: #1f4f95; }
+      .ld2-purple { background: #4b2b83; }
+      .ld2-brown { background: #7a4a05; }
+      .ld2-orange { background: #985000; }
+      .ld2-cyan { background: #006a86; }
+      .ld2-gray { background: #424242; }
+
+      .ld2-btn.ld2-running {
+        background: #9a1111 !important;
+        border-color: #ff5555 !important;
+      }
+
+      .ld2-btn.ld2-okflash {
+        outline: 2px solid #66ff99;
+      }
+
+      @media (max-width: 1000px) {
+        body.ld2-page .map-status {
+          bottom: 100px;
+        }
+
+        .ld2-row,
+        .ld2-row.trace {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .ld2-label {
+          grid-column: 1 / -1;
+        }
+      }
+"""
+
+LIDAR_DRIVE2_BARS_HTML = r"""
+        <div class="ld2-bars" id="ld2Bars">
+          <div class="ld2-row slam">
+            <div class="ld2-label">SLAM / CARTE</div>
+            <button class="ld2-btn ld2-green"  onclick="ld2Post('/slam_start', this, 'DÉMARRÉ')">DÉMARRER</button>
+            <button class="ld2-btn ld2-blue"   onclick="ld2Post('/slam_save_map', this, 'SAUVÉ')">SAUVEG.</button>
+            <button class="ld2-btn ld2-purple" onclick="ld2DownloadPng(this)">TÉLÉCH. PNG</button>
+            <button class="ld2-btn ld2-brown"  onclick="ld2Post('/slam_stop', this, 'ARRÊTÉ')">ARRÊTER</button>
+            <button class="ld2-btn ld2-orange" onclick="ld2Post('/zero_photo', this, 'PHOTO OK')">PHOTO</button>
+            <button class="ld2-btn ld2-gray"   onclick="ld2Post('/zero_video_toggle', this, 'VIDÉO OK')">VIDÉO</button>
+            <button class="ld2-btn ld2-green"  onclick="ld2Recup(this)">RÉCUP</button>
+          </div>
+
+          <div class="ld2-row trace">
+            <div class="ld2-label">TRACE</div>
+            <button class="ld2-btn ld2-green"  onclick="ld2Post('/trace_start', this, 'TRACE DÉM.')">DÉMARR. TRACE</button>
+            <button class="ld2-btn ld2-gray"   id="ld2TraceStateBtn" onclick="ld2RefreshTrace()">TRACE ARRÊTÉE</button>
+            <button class="ld2-btn ld2-blue"   onclick="ld2Post('/trace_follow_start', this, 'SUIVI')">SUIVRE TRACE</button>
+            <button class="ld2-btn ld2-cyan"   onclick="ld2Post('/photo_mark', this, 'REP. OK')">REP. PHOTO</button>
+            <button class="ld2-btn ld2-orange" onclick="ld2Post('/trace_mark', this, 'MARQUÉ')">MARQUER</button>
+            <button class="ld2-btn ld2-gray"   onclick="ld2Retour(this)">RETOUR</button>
+          </div>
+        </div>
+"""
+
+LIDAR_DRIVE2_BARS_JS = r"""
+<script>
+function ld2Flash(btn, text, ms) {
+  if (!btn) return;
+
+  const old = btn.textContent;
+  btn.textContent = text;
+  btn.classList.add("ld2-okflash");
+
+  setTimeout(() => {
+    btn.textContent = old;
+    btn.classList.remove("ld2-okflash");
+  }, ms || 1000);
+}
+
+async function ld2Post(url, btn, okText) {
+  if (btn) btn.disabled = true;
+
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: "{}",
+      cache: "no-store"
+    });
+
+    let j = null;
+    try {
+      j = await r.json();
+    } catch(e) {}
+
+    if (!r.ok || (j && j.ok === false)) {
+      alert(
+        "Commande refusée: " + url + "\\n" +
+        ((j && (j.error || j.message)) || ("HTTP " + r.status))
+      );
+      return null;
+    }
+
+    ld2Flash(btn, okText || "OK", 1000);
+    setTimeout(ld2RefreshTrace, 300);
+
+    return j || {ok: true};
+
+  } catch(e) {
+    alert("Erreur commande: " + url + "\\n" + e);
+    return null;
+
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function ld2DownloadPng(btn) {
+  ld2Flash(btn, "PNG...", 900);
+  window.location.href = "/slam_download_png";
+}
+
+function ld2Recup(btn) {
+  window.open("/captures", "_blank");
+  return false;
+}
+
+async function ld2RefreshTrace() {
+  const btn = document.getElementById("ld2TraceStateBtn");
+  if (!btn) return;
+
+  try {
+    const r = await fetch("/trace_status", {
+      cache: "no-store"
+    });
+
+    const j = await r.json();
+    const active = !!(j && j.active);
+
+    btn.textContent = active ? "TRACE ACTIVE" : "TRACE ARRÊTÉE";
+    btn.classList.toggle("ld2-running", active);
+
+  } catch(e) {
+    btn.textContent = "TRACE ?";
+  }
+}
+
+async function ld2Retour(btn) {
+  let st = null;
+
+  try {
+    const r = await fetch("/trace_follow_status", {
+      cache: "no-store"
+    });
+
+    st = await r.json();
+
+  } catch(e) {}
+
+  if (st && st.running) {
+    if (!confirm("Un suivi/retour est actif. Arrêter ?")) return;
+    await ld2Post("/trace_follow_stop", btn, "STOP RETOUR");
+    return;
+  }
+
+  if (!confirm("Démarrer RETOUR sur la dernière trace ?\\n\\nGardez STOP à portée.")) return;
+
+  await ld2Post("/trace_return_forward_start", btn, "RETOUR");
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+  ld2RefreshTrace();
+  setInterval(ld2RefreshTrace, 1500);
+});
+</script>
+"""
+
+@app.route("/lidar_drive2")
+def lidar_drive2_page():
+    html = LIDAR_DRIVE_HTML
+
+    html = html.replace(
+        "<title>RB2 - Observation LIDAR</title>",
+        "<title>RB2 - LIDAR DRIVE2</title>",
+        1
+    )
+
+    html = html.replace(
+        "<body>",
+        '<body class="ld2-page">',
+        1
+    )
+
+    html = html.replace(
+        "<h2>Observation LIDAR</h2>",
+        "<!-- titre LIDAR DRIVE2 colonne droite supprimé -->",
+        1
+    )
+
+    if "</style>" in html:
+        html = html.replace(
+            "</style>",
+            LIDAR_DRIVE2_BARS_CSS + "\n</style>",
+            1
+        )
+
+    if 'id="ld2Bars"' not in html:
+        inserted = False
+
+        # Insertion idéale : juste après mapStatus, dans le panneau carte.
+        m = re.search(
+            r'(<div[^>]*id="mapStatus"[^>]*>.*?</div>)',
+            html,
+            flags=re.S
+        )
+
+        if m:
+            html = html[:m.end()] + "\n" + LIDAR_DRIVE2_BARS_HTML + html[m.end():]
+            inserted = True
+
+        # Secours : avant la colonne de droite.
+        if not inserted and '<div class="controls">' in html:
+            html = html.replace(
+                '<div class="controls">',
+                LIDAR_DRIVE2_BARS_HTML + '\n      <div class="controls">',
+                1
+            )
+            inserted = True
+
+        # Dernier recours : fin de page. Évite un Internal Server Error.
+        if not inserted and "</body>" in html:
+            html = html.replace(
+                "</body>",
+                LIDAR_DRIVE2_BARS_HTML + "\n</body>",
+                1
+            )
+
+    if "</body>" in html:
+        html = html.replace(
+            "</body>",
+            LIDAR_DRIVE2_BARS_JS + "\n</body>",
+            1
+        )
+    else:
+        html += LIDAR_DRIVE2_BARS_JS
+
+    return app.response_class(html, mimetype="text/html")
+
+# === FIN RB2 LIDAR_DRIVE2 BOUTONS SOUS CARTE ===
+
+
+# === RB2 LIDAR_DRIVE2 HIDE HORIZON TITLE ===
+@app.after_request
+def rb2_lidar_drive2_hide_horizon_title(response):
+    try:
+        if request.path != "/lidar_drive2":
+            return response
+
+        if "text/html" not in response.headers.get("Content-Type", ""):
+            return response
+
+        html = response.get_data(as_text=True)
+
+        marker = "RB2_LD2_HIDE_HORIZON_TITLE_20260706"
+        if marker in html:
+            return response
+
+        # Suppression directe si le titre est présent dans le HTML.
+        html = html.replace(
+            '<div class="panel-title">Horizon artificiel</div>',
+            '<!-- RB2_LD2_HIDE_HORIZON_TITLE_20260706 : Horizon artificiel supprimé -->'
+        )
+
+        html = html.replace(
+            '<div class="panel-title">Horizon</div>',
+            '<!-- RB2_LD2_HIDE_HORIZON_TITLE_20260706 : Horizon supprimé -->'
+        )
+
+        # Sécurité navigateur : si le titre est généré autrement, on le cache.
+        js = """
+<script id="RB2_LD2_HIDE_HORIZON_TITLE_20260706">
+(function () {
+  function rb2Ld2HideHorizonTitle() {
+    document.querySelectorAll(".panel-title, h2, h3, div").forEach(function (el) {
+      const txt = (el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+
+      if (txt === "horizon artificiel" || txt === "horizon") {
+        el.style.display = "none";
+        el.style.visibility = "hidden";
+        el.style.height = "0";
+        el.style.minHeight = "0";
+        el.style.maxHeight = "0";
+        el.style.margin = "0";
+        el.style.padding = "0";
+        el.style.overflow = "hidden";
+      }
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", rb2Ld2HideHorizonTitle);
+  } else {
+    rb2Ld2HideHorizonTitle();
+  }
+
+  setTimeout(rb2Ld2HideHorizonTitle, 300);
+})();
+</script>
+"""
+
+        if "</body>" in html:
+            html = html.replace("</body>", js + "\n</body>", 1)
+        else:
+            html += js
+
+        response.set_data(html)
+        response.headers["Content-Length"] = str(len(response.get_data()))
+
+    except Exception as e:
+        try:
+            print("RB2 lidar_drive2 hide Horizon title erreur:", e)
+        except Exception:
+            pass
+
+    return response
+# === FIN RB2 LIDAR_DRIVE2 HIDE HORIZON TITLE ===
+
+
+# === RB2 LIDAR_DRIVE2 HIDE ETAT RB2 TITLE ===
+@app.after_request
+def rb2_lidar_drive2_hide_etat_rb2_title(response):
+    try:
+        if request.path != "/lidar_drive2":
+            return response
+
+        if "text/html" not in response.headers.get("Content-Type", ""):
+            return response
+
+        html = response.get_data(as_text=True)
+
+        marker = "RB2_LD2_HIDE_ETAT_RB2_TITLE_20260706"
+        if marker in html:
+            return response
+
+        html = html.replace(
+            '<div class="panel-title">État RB2</div>',
+            '<!-- RB2_LD2_HIDE_ETAT_RB2_TITLE_20260706 : État RB2 supprimé -->'
+        )
+
+        html = html.replace(
+            '<div class="panel-title">Etat RB2</div>',
+            '<!-- RB2_LD2_HIDE_ETAT_RB2_TITLE_20260706 : Etat RB2 supprimé -->'
+        )
+
+        # Fallback CSS au cas où le titre serait généré autrement.
+        css = """
+<style id="RB2_LD2_HIDE_ETAT_RB2_TITLE_20260706">
+body.ld2-page .panel-title.ld2-hide-etat-title {
+  display: none !important;
+}
+</style>
+<script>
+(function () {
+  function rb2Ld2HideEtatTitle() {
+    document.querySelectorAll(".panel-title").forEach(function (el) {
+      const txt = (el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+      if (txt === "état rb2" || txt === "etat rb2") {
+        el.style.display = "none";
+        el.style.visibility = "hidden";
+        el.style.height = "0";
+        el.style.minHeight = "0";
+        el.style.maxHeight = "0";
+        el.style.margin = "0";
+        el.style.padding = "0";
+        el.style.overflow = "hidden";
+      }
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", rb2Ld2HideEtatTitle);
+  } else {
+    rb2Ld2HideEtatTitle();
+  }
+
+  setTimeout(rb2Ld2HideEtatTitle, 500);
+})();
+</script>
+"""
+
+        if "</body>" in html:
+            html = html.replace("</body>", css + "\n</body>", 1)
+        else:
+            html += css
+
+        response.set_data(html)
+        response.headers["Content-Length"] = str(len(response.get_data()))
+
+    except Exception as e:
+        try:
+            print("RB2 lidar_drive2 hide Etat RB2 title erreur:", e)
+        except Exception:
+            pass
+
+    return response
+# === FIN RB2 LIDAR_DRIVE2 HIDE ETAT RB2 TITLE ===
+
+
+# === RB2 LIDAR_DRIVE2 VIDEO TRACE CLAIRS ===
+@app.after_request
+def rb2_lidar_drive2_video_trace_clairs(response):
+    try:
+        if request.path != "/lidar_drive2":
+            return response
+
+        if "text/html" not in response.headers.get("Content-Type", ""):
+            return response
+
+        html = response.get_data(as_text=True)
+
+        marker = "RB2_LD2_VIDEO_TRACE_CLAIRS_20260706"
+        if marker in html:
+            return response
+
+        js = r"""
+<script id="RB2_LD2_VIDEO_TRACE_CLAIRS_20260706">
+(function () {
+  "use strict";
+
+  function findVideoButton() {
+    let btn = document.getElementById("ld2VideoBtn");
+    if (btn) return btn;
+
+    const buttons = Array.from(document.querySelectorAll("button"));
+    btn = buttons.find(b => {
+      const on = b.getAttribute("onclick") || "";
+      const txt = (b.textContent || "").toUpperCase();
+      return on.includes("/zero_video_toggle") || txt.includes("VIDÉO");
+    });
+
+    if (btn) btn.id = "ld2VideoBtn";
+    return btn || null;
+  }
+
+  function setVideoButton(active) {
+    const btn = findVideoButton();
+    if (!btn) return;
+
+    btn.textContent = active ? "ARRÊTER VIDÉO" : "DÉMARR. VIDÉO";
+    btn.title = active
+      ? "Cliquer pour arrêter l'enregistrement vidéo"
+      : "Cliquer pour démarrer l'enregistrement vidéo";
+
+    btn.classList.toggle("ld2-running", !!active);
+    btn.onclick = function () {
+      ld2BetterVideoToggle(btn);
+      return false;
+    };
+  }
+
+  async function ld2BetterVideoStatus() {
+    const btn = findVideoButton();
+    if (!btn) return;
+
+    try {
+      const r = await fetch("/zero_video_status", {
+        cache: "no-store"
+      });
+
+      const j = await r.json();
+
+      const active = !!(
+        j &&
+        (
+          j.recording ||
+          j.running ||
+          j.active ||
+          j.video_recording ||
+          j.is_recording ||
+          j.state === "recording" ||
+          j.status === "recording"
+        )
+      );
+
+      setVideoButton(active);
+
+    } catch (e) {
+      btn.textContent = "VIDÉO ?";
+      btn.title = "Statut vidéo inaccessible";
+    }
+  }
+
+  async function ld2BetterVideoToggle(btn) {
+    if (btn) btn.disabled = true;
+
+    try {
+      const r = await fetch("/zero_video_toggle", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: "{}",
+        cache: "no-store"
+      });
+
+      let j = null;
+      try {
+        j = await r.json();
+      } catch (e) {}
+
+      if (!r.ok || (j && j.ok === false)) {
+        alert(
+          "Commande vidéo refusée\n" +
+          ((j && (j.error || j.message)) || ("HTTP " + r.status))
+        );
+        return;
+      }
+
+      setTimeout(ld2BetterVideoStatus, 500);
+
+    } catch (e) {
+      alert("Erreur commande vidéo\n" + e);
+
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function traceButton() {
+    return document.getElementById("ld2TraceStateBtn");
+  }
+
+  async function ld2BetterTraceStatus() {
+    const btn = traceButton();
+    if (!btn) return;
+
+    try {
+      const r = await fetch("/trace_status", {
+        cache: "no-store"
+      });
+
+      const j = await r.json();
+      const active = !!(j && j.active);
+
+      btn.textContent = active ? "ARRÊTER TRACE" : "TRACE ARRÊTÉE";
+      btn.title = active
+        ? "Cliquer pour arrêter la trace en cours"
+        : "Aucune trace active";
+
+      btn.classList.toggle("ld2-running", active);
+
+      btn.onclick = function () {
+        ld2BetterTraceClick(btn);
+        return false;
+      };
+
+    } catch (e) {
+      btn.textContent = "TRACE ?";
+      btn.title = "Statut trace inaccessible";
+    }
+  }
+
+  async function ld2BetterTraceClick(btn) {
+    const active = btn && btn.classList.contains("ld2-running");
+
+    if (!active) {
+      await ld2BetterTraceStatus();
+      return;
+    }
+
+    if (!confirm("Arrêter la trace en cours ?")) return;
+
+    if (btn) btn.disabled = true;
+
+    try {
+      const r = await fetch("/trace_stop", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: "{}",
+        cache: "no-store"
+      });
+
+      let j = null;
+      try {
+        j = await r.json();
+      } catch (e) {}
+
+      if (!r.ok || (j && j.ok === false)) {
+        alert(
+          "Arrêt trace refusé\n" +
+          ((j && (j.error || j.message)) || ("HTTP " + r.status))
+        );
+        return;
+      }
+
+      setTimeout(ld2BetterTraceStatus, 400);
+
+    } catch (e) {
+      alert("Erreur arrêt trace\n" + e);
+
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  window.ld2RefreshTrace = ld2BetterTraceStatus;
+  window.ld2RefreshVideoStatus = ld2BetterVideoStatus;
+  window.ld2VideoToggle = ld2BetterVideoToggle;
+
+  document.addEventListener("DOMContentLoaded", function () {
+    ld2BetterVideoStatus();
+    ld2BetterTraceStatus();
+
+    setInterval(ld2BetterVideoStatus, 2000);
+    setInterval(ld2BetterTraceStatus, 1500);
+  });
+
+  setTimeout(ld2BetterVideoStatus, 500);
+  setTimeout(ld2BetterTraceStatus, 500);
+})();
+</script>
+"""
+
+        if "</body>" in html:
+            html = html.replace("</body>", js + "\n</body>", 1)
+        else:
+            html += js
+
+        response.set_data(html)
+        response.headers["Content-Length"] = str(len(response.get_data()))
+
+    except Exception as e:
+        try:
+            print("RB2 lidar_drive2 video/trace clairs erreur:", e)
+        except Exception:
+            pass
+
+    return response
+# === FIN RB2 LIDAR_DRIVE2 VIDEO TRACE CLAIRS ===
+
+
+
+
+
 
 @app.route("/relay_light", methods=["GET", "POST"])
 def relay_light_proxy():
