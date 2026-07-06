@@ -11,6 +11,394 @@ import urllib.error
 import urllib.parse
 
 app = Flask(__name__)
+
+
+
+# === RB2 TERRAIN3 TRACE STATUS REMOVE ===
+@app.after_request
+def rb2_terrain3_trace_status_remove(response):
+    """
+    Retire côté serveur le résidu d'état TRACE dans /terrain3 :
+    petite boîte/barre avec texte du genre 'points — âge'.
+    """
+    try:
+        from flask import request
+        import re
+        import unicodedata
+
+        if request.path != "/terrain3":
+            return response
+
+        if "text/html" not in response.headers.get("Content-Type", ""):
+            return response
+
+        html = response.get_data(as_text=True)
+
+        def norm(s):
+            return unicodedata.normalize("NFD", s or "").encode(
+                "ascii", "ignore"
+            ).decode("ascii").upper()
+
+        def spans_for_tag(source, tag):
+            pat = re.compile(r"</?%s\b[^>]*>" % re.escape(tag), re.I)
+            stack = []
+            spans = []
+
+            for m in pat.finditer(source):
+                token = m.group(0).lower()
+
+                if token.startswith("</"):
+                    if stack:
+                        start = stack.pop()
+                        spans.append((start, m.end()))
+                else:
+                    if not token.endswith("/>"):
+                        stack.append(m.start())
+
+            return spans
+
+        candidates = []
+
+        for tag in ["div", "span", "section", "p"]:
+            for start, end in spans_for_tag(html, tag):
+                chunk = html[start:end]
+                n = norm(chunk)
+                size = end - start
+
+                # Résidu visible : "7 points — âge : 0.0 s"
+                has_trace_status = (
+                    "POINTS" in n and
+                    (
+                        "AGE" in n or
+                        "ÂGE" in chunk.upper() or
+                        "A GE" in n
+                    )
+                )
+
+                # Résidu possible : barre/panneau de trace avec progress/status.
+                has_trace_progress = (
+                    "TRACE" in n and
+                    (
+                        "PROGRESS" in n or
+                        "STATUS" in n or
+                        "POINTS" in n
+                    )
+                )
+
+                if not (has_trace_status or has_trace_progress):
+                    continue
+
+                if 20 <= size <= 12000:
+                    candidates.append((size, start, end, tag))
+
+        removed = False
+        detail = "none"
+
+        if candidates:
+            candidates.sort(key=lambda x: x[0])
+            size, start, end, tag = candidates[0]
+
+            detail = "tag=%s size=%s" % (tag, size)
+
+            html = (
+                html[:start]
+                + "\n<!-- RB2_TERRAIN3_TRACE_STATUS_REMOVED %s -->\n" % detail
+                + html[end:]
+            )
+
+            removed = True
+
+        html = (
+            "\n<!-- RB2_TERRAIN3_TRACE_STATUS_REMOVE removed=%s detail=%s -->\n"
+            % (removed, detail)
+            + html
+        )
+
+        response.set_data(html)
+        response.headers["Content-Length"] = str(len(response.get_data()))
+        response.headers["Cache-Control"] = "no-store"
+
+        return response
+
+    except Exception as e:
+        try:
+            print("RB2 terrain3 trace status remove erreur:", e)
+        except Exception:
+            pass
+
+        return response
+# === FIN RB2 TERRAIN3 TRACE STATUS REMOVE ===
+
+# === RB2 TERRAIN3 TRACE FORCE REMOVE ===
+@app.after_request
+def rb2_terrain3_trace_force_remove(response):
+    """
+    Retire côté serveur le bloc TRACE restant de /terrain3.
+    Ce n'est pas un display:none : le HTML est supprimé avant d'être envoyé.
+    """
+    try:
+        from flask import request
+        import re
+        import unicodedata
+
+        if request.path != "/terrain3":
+            return response
+
+        ctype = response.headers.get("Content-Type", "")
+        if "text/html" not in ctype:
+            return response
+
+        html = response.get_data(as_text=True)
+
+        def norm(s):
+            return unicodedata.normalize("NFD", s or "").encode(
+                "ascii", "ignore"
+            ).decode("ascii").upper()
+
+        def spans_for_tag(source, tag):
+            pat = re.compile(r"</?%s\b[^>]*>" % re.escape(tag), re.I)
+            stack = []
+            spans = []
+
+            for m in pat.finditer(source):
+                token = m.group(0).lower()
+
+                if token.startswith("</"):
+                    if stack:
+                        start = stack.pop()
+                        spans.append((start, m.end()))
+                else:
+                    if not token.endswith("/>"):
+                        stack.append(m.start())
+
+            return spans
+
+        tags = ["tr", "div", "section", "nav", "footer", "header"]
+        candidates = []
+
+        for tag in tags:
+            for start, end in spans_for_tag(html, tag):
+                chunk = html[start:end]
+                n = norm(chunk)
+
+                if "TRACE" not in n:
+                    continue
+
+                hits = 0
+                for word in [
+                    "DEMARR",
+                    "ARRET",
+                    "ARRETEE",
+                    "SUIVRE",
+                    "MARQUER",
+                    "RETOUR",
+                    "REP PHOTO",
+                    "PHOTO REPERE"
+                ]:
+                    if word in n:
+                        hits += 1
+
+                button_count = len(re.findall(r"<button\b", chunk, flags=re.I))
+                size = end - start
+
+                # On veut un vrai bloc de ligne, pas un seul petit bouton.
+                if hits >= 1 and button_count >= 2 and 100 <= size <= 60000:
+                    candidates.append((size, button_count, hits, start, end, tag))
+
+        removed = False
+        detail = "none"
+
+        if candidates:
+            candidates.sort(key=lambda x: (x[0], -x[1], -x[2]))
+            size, button_count, hits, start, end, tag = candidates[0]
+
+            detail = "tag=%s size=%s buttons=%s hits=%s" % (
+                tag,
+                size,
+                button_count,
+                hits
+            )
+
+            html = (
+                html[:start]
+                + "\n<!-- RB2_TERRAIN3_TRACE_FORCE_REMOVED %s -->\n" % detail
+                + html[end:]
+            )
+
+            removed = True
+
+        html = (
+            "\n<!-- RB2_TERRAIN3_TRACE_FORCE removed=%s detail=%s -->\n"
+            % (removed, detail)
+            + html
+        )
+
+        response.set_data(html)
+        response.headers["Content-Length"] = str(len(response.get_data()))
+        response.headers["Cache-Control"] = "no-store"
+
+        return response
+
+    except Exception as e:
+        try:
+            print("RB2 terrain3 trace force remove erreur:", e)
+        except Exception:
+            pass
+
+        return response
+# === FIN RB2 TERRAIN3 TRACE FORCE REMOVE ===
+
+# === RB2 TERRAIN3 SERVER CLEAN ===
+@app.before_request
+def rb2_terrain3_server_clean():
+    """
+    /terrain3 = /terrain fonctionnel,
+    mais les blocs SLAM/CARTE et TRACE sont retirés du HTML
+    avant d'être envoyés au navigateur.
+    """
+    try:
+        from flask import request, make_response
+        import re
+        import unicodedata
+
+        if request.path != "/terrain3":
+            return None
+
+        # Trouver la fonction qui sert /terrain.
+        fn = globals().get("terrain_page")
+
+        if fn is None:
+            for rule in app.url_map.iter_rules():
+                if rule.rule == "/terrain":
+                    fn = app.view_functions.get(rule.endpoint)
+                    break
+
+        if fn is None:
+            return app.response_class(
+                "ERREUR /terrain3: fonction /terrain introuvable",
+                status=500,
+                mimetype="text/plain"
+            )
+
+        resp = make_response(fn())
+        html = resp.get_data(as_text=True)
+
+        def norm(s):
+            return unicodedata.normalize("NFD", s or "").encode(
+                "ascii", "ignore"
+            ).decode("ascii").upper()
+
+        def spans_for_tag(source, tag):
+            pat = re.compile(r"</?%s\b[^>]*>" % re.escape(tag), re.I)
+            stack = []
+            spans = []
+
+            for m in pat.finditer(source):
+                token = m.group(0).lower()
+
+                if token.startswith("</"):
+                    if stack:
+                        start = stack.pop()
+                        spans.append((start, m.end()))
+                else:
+                    if not token.endswith("/>"):
+                        stack.append(m.start())
+
+            return spans
+
+        def remove_smallest_block(source, label, marker_sets):
+            tags = ["div", "tr", "section", "nav", "header", "footer"]
+            candidates = []
+
+            for markers in marker_sets:
+                markers_norm = [norm(x) for x in markers]
+
+                for tag in tags:
+                    for start, end in spans_for_tag(source, tag):
+                        chunk = source[start:end]
+                        n = norm(chunk)
+
+                        if all(m in n for m in markers_norm):
+                            size = end - start
+
+                            # Éviter de supprimer toute la page.
+                            if 100 <= size <= 14000:
+                                candidates.append((size, start, end, markers))
+
+            if not candidates:
+                return source, False
+
+            candidates.sort(key=lambda x: x[0])
+            size, start, end, markers = candidates[0]
+
+            comment = (
+                "\n<!-- RB2_TERRAIN3_REMOVED_%s size=%s markers=%s -->\n"
+                % (label, size, ",".join(markers))
+            )
+
+            source = source[:start] + comment + source[end:]
+            return source, True
+
+        # Retirer le bloc SLAM / CARTE.
+        html, slam_removed = remove_smallest_block(
+            html,
+            "SLAM",
+            [
+                ["rb2SlamStartBtn", "rb2SlamStopBtn"],
+                ["rb2SlamSaveBtn", "rb2SlamDownloadBtn"],
+                ["SLAM", "CARTE", "SAUVEG"],
+                ["SLAM", "CARTE", "TELECH"],
+                ["SLAM", "CARTE"],
+            ],
+        )
+
+        # Retirer le bloc TRACE.
+        html, trace_removed = remove_smallest_block(
+            html,
+            "TRACE",
+            [
+                ["rb2TraceStartBtn", "rb2TraceFollowBtn"],
+                ["rb2TraceMarkBtn", "rb2ReturnForwardBtn"],
+                ["TRACE", "SUIVRE TRACE"],
+                ["TRACE", "MARQUER"],
+                ["TRACE", "RETOUR"],
+            ],
+        )
+
+        html = html.replace(
+            "<title>RB2 - Terrain</title>",
+            "<title>RB2 - Terrain3</title>",
+            1
+        )
+
+        marker = (
+            "\n<!-- RB2_TERRAIN3_SERVER_CLEAN "
+            "slam_removed=%s trace_removed=%s -->\n"
+            % (slam_removed, trace_removed)
+        )
+
+        if "<body" in html:
+            html = html.replace("<body", marker + "<body", 1)
+        else:
+            html = marker + html
+
+        resp.set_data(html)
+        resp.headers["Content-Length"] = str(len(resp.get_data()))
+        resp.headers["Cache-Control"] = "no-store"
+
+        return resp
+
+    except Exception as e:
+        try:
+            return app.response_class(
+                "ERREUR /terrain3: " + str(e),
+                status=500,
+                mimetype="text/plain"
+            )
+        except Exception:
+            return None
+# === FIN RB2 TERRAIN3 SERVER CLEAN ===
+
 esp32 = RB2ESP32()
 
 # --- Sécurité commandes moteur RB2 ---
@@ -16049,6 +16437,30 @@ def terrain_page():
 
 
 
+
+
+# === RB2 TERRAIN2 ALIAS TERRAIN FONCTIONNEL ===
+@app.before_request
+def rb2_terrain2_alias_terrain_fonctionnel():
+    """
+    /terrain2 est temporairement servi par la page /terrain,
+    parce que /terrain a les moteurs/vitesses validés.
+    Ne touche pas à /terrain, /lidar_drive2, /secours ni au BNO055.
+    """
+    try:
+        from flask import request
+
+        if request.path == "/terrain2":
+            return terrain_page()
+
+    except Exception as e:
+        try:
+            print("RB2 terrain2 alias terrain erreur:", e)
+        except Exception:
+            pass
+
+    return None
+# === FIN RB2 TERRAIN2 ALIAS TERRAIN FONCTIONNEL ===
 
 # =====================================================
 # RB2 - ARRÊT COMPLET SÉCURISÉ
