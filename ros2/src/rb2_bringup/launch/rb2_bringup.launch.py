@@ -17,18 +17,6 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(ldlidar_launch)
     )
 
-    imu = Node(
-        package='rb2_sensors',
-        executable='mpu6050_node',
-        name='rb2_mpu6050',
-        output='screen',
-        parameters=[
-            {'bus': 1},
-            {'address': 0x68},
-            {'frame_id': 'imu_link'},
-            {'rate_hz': 50.0},
-        ]
-    )
 
     base_link_to_imu_tf = Node(
         package='tf2_ros',
@@ -85,7 +73,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         lidar,
-        imu,
         base_link_to_imu_tf,
         # esp32_cmd_vel,  # Désactivé : mode web direct ESP32
         wheel_ticks_json,
