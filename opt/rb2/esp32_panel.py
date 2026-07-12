@@ -3074,7 +3074,7 @@ setTimeout(rb2AddShutdownButtonFixedSimple, 1500);
       lidarBtn.style.borderRadius = "8px";
       lidarBtn.style.cursor = "pointer";
       lidarBtn.onclick = function () {
-        window.open("/lidar_drive", "_blank");
+        window.open("/lidar_drive2", "_blank");
       };
 
       const camBtn = document.createElement("button");
@@ -5163,7 +5163,7 @@ def rb2_terrain2_page():
     </div>
 <button id="wifiLocalBtn" class="green disabled" title="Route WiFi Local à confirmer avant activation">WiFi Local ON</button>
 <a class="linkbtn danger" href="/secours">SECOURS</a>
-    <a class="linkbtn blue" href="/lidar_drive">LIDAR DRIVE</a>
+    <a class="linkbtn blue" href="/lidar_drive2">LIDAR DRIVE</a>
   </div>
 
   <main class="page">
@@ -10047,7 +10047,7 @@ TERRAIN_HTML = """
                   style="padding:3px 9px;height:23px;min-width:74px;border-radius:7px;border:1px solid #ff4040;background:#b00000;color:#fff;font-size:10px;font-weight:900;cursor:pointer;">
             ARRÊT RB2
           </button>
-          <button onclick="window.open('/lidar_drive','_blank')"
+          <button onclick="window.open('/lidar_drive2','_blank')"
                   style="padding:3px 8px;height:23px;min-width:48px;border-radius:7px;border:1px solid #1d4ed8;background:#2563eb;color:#fff;font-size:10px;font-weight:900;cursor:pointer;">
             LIDAR
           </button>
@@ -11750,7 +11750,7 @@ setTimeout(rb2AddShutdownAllTerrainButton, 1500);
       lidarBtn.style.borderRadius = "8px";
       lidarBtn.style.cursor = "pointer";
       lidarBtn.onclick = function () {
-        window.open("/lidar_drive", "_blank");
+        window.open("/lidar_drive2", "_blank");
       };
 
       const camBtn = document.createElement("button");
@@ -12499,7 +12499,7 @@ document.addEventListener("DOMContentLoaded", loadCaptures);
       lidarBtn.style.borderRadius = "8px";
       lidarBtn.style.cursor = "pointer";
       lidarBtn.onclick = function () {
-        window.open("/lidar_drive", "_blank");
+        window.open("/lidar_drive2", "_blank");
       };
 
       const camBtn = document.createElement("button");
@@ -13425,7 +13425,7 @@ window.addEventListener("resize", function () { if (lastLidarData) drawLidarMap(
       lidarBtn.style.borderRadius = "8px";
       lidarBtn.style.cursor = "pointer";
       lidarBtn.onclick = function () {
-        window.open("/lidar_drive", "_blank");
+        window.open("/lidar_drive2", "_blank");
       };
 
       const camBtn = document.createElement("button");
