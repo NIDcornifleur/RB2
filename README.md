@@ -17,8 +17,10 @@ Cette branche de nettoyage conserve l'état de production nettoyé du dépôt.
 
 ## Points d'entrée principaux
 
-- Interface terrain : `/terrain`
+- Interface terrain : `/terrain4` (page autonome légère, recommandée — voir `docs/TERRAIN4.md`)
+- LIDAR / conduite : `/lidar_drive2` (SLAM, carte, TRACE, RETOUR)
 - Panneau ESP32 : `opt/rb2/esp32_panel.py`
+- Page terrain autonome : `opt/rb2/terrain4.html`
 - LIDAR JSON : `opt/rb2/rb2_lidar_json.py`
 - LIDAR carte JSON : `opt/rb2/rb2_lidar_map_json.py`
 - IMU JSON : `opt/rb2/rb2_imu_json.py`
@@ -35,6 +37,7 @@ Documents importants dans `docs/` :
 - `NETTOYAGE_CODEX_20260626.md` : notes de nettoyage prudent du dépôt.
 - `VALIDATION_2026-06-20_*` : validations terrain et état stable.
 - `CONFIG_ZERO_CAM.md` : configuration caméra Zero.
+- `TERRAIN4.md` : page terrain autonome `/terrain4`, historique des correctifs et scripts d'installation.
 
 ## Maintenance
 

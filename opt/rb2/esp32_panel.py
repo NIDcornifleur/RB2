@@ -17082,6 +17082,37 @@ def rb2_hide_top_retour_after_request_css_20260702(response):
 # ============================================================
 
 
+# ============================================================
+# RB2 TERRAIN4 — PAGE AUTONOME LEGERE
+#
+# Le HTML est volontairement séparé du fichier Python monolithique. La route
+# ne dépend ni de /terrain, ni de /terrain2, ni de /terrain3. Elle ne reçoit
+# donc aucune des injections et minuteries historiques de ces pages.
+# ============================================================
+
+RB2_TERRAIN4_HTML_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "terrain4.html",
+)
+
+
+@app.route("/terrain4")
+def rb2_terrain4_page():
+    try:
+        with open(RB2_TERRAIN4_HTML_PATH, "r", encoding="utf-8") as source:
+            html = source.read()
+    except OSError as exc:
+        return Response(
+            "Terrain4 indisponible : " + str(exc),
+            status=500,
+            mimetype="text/plain",
+        )
+
+    response = Response(html, mimetype="text/html")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["X-RB2-Page"] = "terrain4-standalone"
+    return response
+
 
 if __name__ == "__main__":
     try:
