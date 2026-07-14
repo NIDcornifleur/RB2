@@ -14175,6 +14175,42 @@ document.addEventListener("DOMContentLoaded", function() {
 </script>
 """
 
+LIDAR_DRIVE2_RETOUR_CSS = r"""
+      .state-row {
+        display: flex;
+        align-items: stretch;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .state-row .state-big {
+        flex: 1 1 auto;
+        min-width: 0;
+        margin-bottom: 0;
+      }
+
+      .ld2-nav-retour {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px 14px;
+        border-radius: 10px;
+        border: 1px solid #375fa8;
+        background: #1f4f95;
+        color: #ffffff;
+        font-weight: 900;
+        font-size: 14px;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+
+      .ld2-nav-retour:hover {
+        filter: brightness(1.15);
+      }
+"""
+
+
 @app.route("/lidar_drive2")
 def lidar_drive2_page():
     html = LIDAR_DRIVE_HTML
@@ -14197,10 +14233,19 @@ def lidar_drive2_page():
         1
     )
 
+    html = html.replace(
+        '<div class="state-big" id="rb2StateBig">ATTENTE</div>',
+        '<div class="state-row">\n'
+        '          <div class="state-big" id="rb2StateBig">ATTENTE</div>\n'
+        '          <a class="ld2-nav-retour" href="/terrain4">RETOUR</a>\n'
+        '        </div>',
+        1
+    )
+
     if "</style>" in html:
         html = html.replace(
             "</style>",
-            LIDAR_DRIVE2_BARS_CSS + "\n</style>",
+            LIDAR_DRIVE2_BARS_CSS + LIDAR_DRIVE2_RETOUR_CSS + "\n</style>",
             1
         )
 
