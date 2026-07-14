@@ -351,6 +351,7 @@
     driveGeneration: 0,
     driveTimer: null,
     driveCommand: null,
+    driveDirection: null,
     driveSpeed: 100,
     driveInFlight: false,
     pan: 95,
@@ -488,6 +489,7 @@
     state.driveGeneration += 1;
     clearTimeout(state.driveTimer);
     state.driveCommand = commandFor(direction);
+    state.driveDirection = direction;
     paintDrive(direction);
     log("Conduite " + direction + " à d" + state.driveSpeed + ".");
     void drivePulse(state.driveGeneration, false);
@@ -496,6 +498,7 @@
   function stopDrive(reason="relâchement") {
     state.driveGeneration += 1;
     state.driveCommand = null;
+    state.driveDirection = null;
     clearTimeout(state.driveTimer);
     paintDrive("stop");
 
@@ -517,6 +520,13 @@
       button.addEventListener("pointerup", event => {
         event.preventDefault();
         if (button.dataset.drive !== "stop") stopDrive();
+      });
+      button.addEventListener("pointermove", event => {
+        if (!state.driveDirection) return;
+        const target = document.elementFromPoint(event.clientX, event.clientY);
+        const nextButton = target && target.closest("#drivePad button");
+        if (!nextButton || nextButton.dataset.drive === "stop") return;
+        if (nextButton.dataset.drive !== state.driveDirection) startDrive(nextButton.dataset.drive);
       });
       button.addEventListener("pointercancel", () => stopDrive("annulation"));
       button.addEventListener("lostpointercapture", () => stopDrive("pointeur perdu"));
