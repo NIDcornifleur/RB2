@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>RB2 — Terrain4</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0d10;
+      --panel: #14191f;
+      --panel-2: #1b222a;
+      --line: #35404b;
+      --text: #f2f5f7;
+      --muted: #aab5bf;
+      --blue: #1976d2;
+      --green: #16803c;
+      --orange: #a55408;
+      --red: #c0162d;
+      --purple: #6741a5;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.35 Arial, Helvetica, sans-serif;
+      overscroll-behavior: none;
+    }
+
+    button, a.button {
+      min-height: 44px;
+      border: 1px solid #536171;
+      border-radius: 9px;
+      background: #28313a;
+      color: #fff;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 9px 12px;
+      touch-action: manipulation;
+      user-select: none;
+    }
+
+    button:active, a.button:active { transform: translateY(1px); }
+    button:disabled { opacity: .55; cursor: wait; }
+    .blue { background: var(--blue); }
+    .green { background: var(--green); }
+    .orange { background: var(--orange); }
+    .red { background: var(--red); }
+    .purple { background: var(--purple); }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 9px;
+      background: rgba(13, 17, 22, .97);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .title { margin-right: auto; min-width: 145px; }
+    .title strong { display: block; font-size: 17px; }
+    .title small { color: var(--muted); }
+    .topbar .button, .topbar button { min-height: 38px; padding: 6px 10px; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      gap: 10px;
+      padding: 10px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    .main, .side { display: grid; align-content: start; gap: 10px; min-width: 0; }
+
+    .visual-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .card {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--panel);
+    }
+
+    .camera-frame {
+      position: relative;
+      min-height: 320px;
+      background: #000;
+      border: 1px solid #303943;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    #camera {
+      display: block;
+      width: 100%;
+      height: min(66vh, 720px);
+      min-height: 320px;
+      object-fit: contain;
+      background: #000;
+    }
+
+    #cameraState {
+      position: absolute;
+      left: 8px;
+      top: 8px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, .72);
+      color: #d3dbe2;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .button-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+      margin-top: 8px;
+    }
+
+    .pill {
+      padding: 7px;
+      border: 1px solid #485562;
+      border-radius: 8px;
+      background: #222a32;
+      color: #d8e0e6;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .pill.ok { border-color: #29954d; color: #8ff0ae; }
+    .pill.warn { border-color: #bd741b; color: #ffd08a; }
+    .pill.bad { border-color: #c93b4e; color: #ff9ba8; }
+
+    .drive-grid, .pt-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .drive-grid button {
+      min-height: 66px;
+      font-size: 17px;
+      touch-action: none;
+    }
+
+    .drive-grid button.active {
+      background: #0d8f42;
+      outline: 3px solid #70e99a;
+    }
+
+    .drive-grid .stop {
+      background: #d30f2b;
+      border-color: #ff7285;
+      font-size: 18px;
+    }
+
+    .speed-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .speed-row button { min-height: 38px; padding: 5px; }
+    .speed-row button.active { background: #1669af; outline: 2px solid #63b6f5; }
+
+    .pt-grid button { min-height: 52px; font-size: 20px; }
+    .pt-readout {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #394652;
+      border-radius: 8px;
+      background: #0f1419;
+      font-weight: 800;
+    }
+
+    .two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+    .lidar-frame {
+      position: relative;
+      min-height: 320px;
+      border: 1px solid #303943;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #030607;
+    }
+
+    #lidarCanvas {
+      display: block;
+      width: 100%;
+      height: min(66vh, 720px);
+      min-height: 320px;
+      background: #030607;
+    }
+
+    #lidarState {
+      position: absolute;
+      left: 8px;
+      top: 8px;
+      padding: 4px 8px;
+      border: 1px solid #48606e;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, .75);
+      color: #d8e3ea;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .topbar #shutdownBtn { width: auto; min-height: 38px; font-size: 13px; }
+
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .side .full { grid-column: 1 / -1; }
+      #camera { height: min(58vh, 620px); }
+      #lidarCanvas { height: min(58vh, 620px); }
+    }
+
+    @media (max-width: 1250px) {
+      .visual-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 650px) {
+      .topbar { flex-wrap: wrap; }
+      .title { width: 100%; }
+      .layout { padding: 6px; gap: 6px; }
+      .side { grid-template-columns: 1fr; }
+      .button-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #camera { height: 45vh; min-height: 240px; }
+      #lidarCanvas { height: 45vh; min-height: 240px; }
+      .camera-frame { min-height: 240px; }
+      .lidar-frame { min-height: 240px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="title">
+      <strong>RB2 — Terrain4</strong>
+      <strong>Roméo St-Cyr, juillet 2026</strong>
+    </div>
+    <button id="shutdownBtn" class="red" type="button">ARRET RB2</button>
+    <button id="lightBtn" type="button">LUMIÈRES —</button>
+    <button id="relay2Btn" type="button">RELAIS 2 —</button>
+    <span id="linkState" class="pill">Lien —</span>
+    <button id="wifiBtn" type="button">Wi‑Fi local —</button>
+    <a class="button blue" href="/lidar_drive2">LIDAR DRIVE</a>
+    <a class="button red" href="/secours">SECOURS</a>
+  </header>
+
+  <main class="layout">
+    <section class="main">
+      <div class="visual-grid">
+        <div class="card">
+          <div class="camera-frame">
+            <img id="camera" src="/zero_cam_stream.mjpg" alt="Caméra RB2">
+            <span id="cameraState">connexion…</span>
+          </div>
+          <div class="button-row">
+            <button id="photoBtn" class="blue" type="button">PHOTO</button>
+            <button id="videoBtn" class="orange" type="button">VIDÉO</button>
+            <a class="button purple" href="/captures" target="_blank">CAPTURES</a>
+            <button id="reloadCameraBtn" type="button">RECHARGER IMAGE</button>
+            <a class="button green" href="/zero_cam_stream.mjpg" target="_blank">CAMÉRA DIRECTE</a>
+            <button id="restartCameraBtn" class="red" type="button">RESTART CAMÉRA</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="lidar-frame">
+            <canvas id="lidarCanvas"></canvas>
+            <span id="lidarState">LIDAR —</span>
+          </div>
+          <div class="button-row two">
+            <button id="lidarZoomOutBtn" type="button">ZOOM −</button>
+            <button id="lidarZoomInBtn" type="button">ZOOM +</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="card full">
+        <div id="drivePad" class="drive-grid">
+          <span></span>
+          <button type="button" data-drive="forward">▲<br>AVANCE</button>
+          <span></span>
+          <button type="button" data-drive="left">◀<br>GAUCHE</button>
+          <button id="stopBtn" class="stop" type="button" data-drive="stop">STOP</button>
+          <button type="button" data-drive="right">DROITE<br>▶</button>
+          <span></span>
+          <button type="button" data-drive="back">RECUL<br>▼</button>
+          <span></span>
+        </div>
+        <div id="speedRow" class="speed-row">
+          <button type="button" data-speed="25" title="~9 rpm">25%</button>
+          <button type="button" data-speed="50" title="~18 rpm">50%</button>
+          <button type="button" data-speed="75" title="~28 rpm">75%</button>
+          <button class="active" type="button" data-speed="100" title="~37 rpm">100%</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="pt-grid">
+          <span></span><button id="tiltUpBtn" type="button">▲</button><span></span>
+          <button id="panLeftBtn" type="button">◀</button>
+          <div class="pt-readout"><span>P <b id="panValue">95</b>°</span><span>T <b id="tiltValue">90</b>°</span></div>
+          <button id="panRightBtn" type="button">▶</button>
+          <span></span><button id="tiltDownBtn" type="button">▼</button><span></span>
+        </div>
+        <div class="button-row two">
+          <button id="centerPtBtn" type="button">CENTRE</button>
+          <button id="tiltLowBtn" type="button">TILT 68°</button>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <script>
+  "use strict";
+
+  const state = {
+    driveToken: "terrain4-" + Date.now() + "-" + Math.floor(Math.random() * 1e9),
+    driveSeq: 0,
+    serverOffsetMs: 0,
+    driveGeneration: 0,
+    driveTimer: null,
+    driveCommand: null,
+    driveSpeed: 100,
+    driveInFlight: false,
+    pan: 95,
+    tilt: 90,
+    lightOn: false,
+    relay2On: false,
+    videoOn: false,
+    lidarTick: 0,
+    lidarTimer: null,
+    lidarStopped: false,
+    lidarZoom: 1.0,
+    lastLidar: null,
+    lastRtt: null
+  };
+
+  const $ = id => document.getElementById(id);
+
+  function log(message) {
+    console.log("[Terrain4] " + message);
+  }
+
+  function setPill(id, text, level="") {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = "pill" + (level ? " " + level : "");
+  }
+
+  async function fetchJson(url, options={}, timeoutMs=1800) {
+    const started = performance.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, Object.assign({}, options, {
+        signal: controller.signal,
+        cache: "no-store"
+      }));
+      const text = await response.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; }
+      catch (_) { data = {ok: response.ok, text: text}; }
+      data.__rtt = Math.round(performance.now() - started);
+      if (!response.ok) {
+        throw new Error((data.error || ("HTTP " + response.status)));
+      }
+      noteRtt(data.__rtt);
+      return data;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function noteRtt(ms) {
+    if (!Number.isFinite(ms)) return;
+    state.lastRtt = ms;
+    const level = ms < 80 ? "ok" : (ms < 250 ? "warn" : "bad");
+    setPill("linkState", "Lien " + ms + " ms", level);
+  }
+
+  async function syncServerClock(showLog=false) {
+    const before = Date.now();
+    try {
+      const data = await fetchJson("/drive_time", {}, 1800);
+      const after = Date.now();
+      const midpoint = Math.round((before + after) / 2);
+      state.serverOffsetMs = Number(data.server_ms) - midpoint;
+      state.driveSeq = Math.max(state.driveSeq, Number(data.server_ms) || 0);
+      if (showLog) log("Lien et horloge synchronisés en " + data.__rtt + " ms.");
+      return true;
+    } catch (error) {
+      setPill("linkState", "Lien en erreur", "bad");
+      if (showLog) log("Test lien impossible : " + error.message);
+      return false;
+    }
+  }
+
+  function nextDriveSeq() {
+    state.driveSeq = Math.max(state.driveSeq + 1, Date.now());
+    return state.driveSeq;
+  }
+
+  function buildDrivePayload(command) {
+    return {
+      cmd: command,
+      drive_seq: nextDriveSeq(),
+      drive_token: state.driveToken,
+      sent_server_ms: Math.round(Date.now() + state.serverOffsetMs)
+    };
+  }
+
+  async function sendDrive(command, quiet=false) {
+    const started = performance.now();
+    try {
+      const data = await fetchJson("/cmd", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(buildDrivePayload(command))
+      }, 1600);
+      if (data.ok === false && !quiet) log("Moteurs refusés : " + (data.error || "erreur"));
+      return data;
+    } catch (error) {
+      if (!quiet) log("Commande moteur impossible : " + error.message);
+      return {ok: false, error: error.message};
+    }
+  }
+
+  function commandFor(direction) {
+    const v = state.driveSpeed;
+    if (direction === "forward") return "d" + v + "," + v;
+    if (direction === "back") return "d-" + v + ",-" + v;
+    if (direction === "left") return "d-" + v + "," + v;
+    if (direction === "right") return "d" + v + ",-" + v;
+    return "d0,0";
+  }
+
+  function paintDrive(direction) {
+    document.querySelectorAll("#drivePad button").forEach(button => {
+      button.classList.toggle("active", button.dataset.drive === direction && direction !== "stop");
+    });
+  }
+
+  async function drivePulse(generation, quiet=false) {
+    if (generation !== state.driveGeneration || !state.driveCommand) return;
+    const result = await sendDrive(state.driveCommand, quiet);
+    if (result && result.ok === false && !quiet) log("Mouvement refusé.");
+    if (generation !== state.driveGeneration || !state.driveCommand) return;
+    state.driveTimer = setTimeout(() => drivePulse(generation, true), 280);
+  }
+
+  function startDrive(direction) {
+    if (direction === "stop") {
+      stopDrive("bouton STOP");
+      return;
+    }
+    state.driveGeneration += 1;
+    clearTimeout(state.driveTimer);
+    state.driveCommand = commandFor(direction);
+    paintDrive(direction);
+    log("Conduite " + direction + " à d" + state.driveSpeed + ".");
+    void drivePulse(state.driveGeneration, false);
+  }
+
+  function stopDrive(reason="relâchement") {
+    state.driveGeneration += 1;
+    state.driveCommand = null;
+    clearTimeout(state.driveTimer);
+    paintDrive("stop");
+
+    // Chaque STOP possède une séquence plus récente. Toute commande de mouvement
+    // encore en transit devient donc périmée côté serveur.
+    void sendDrive("d0,0", true);
+    setTimeout(() => void sendDrive("d0,0", true), 90);
+    setTimeout(() => void sendDrive("d0,0", true), 220);
+    if (reason === "bouton STOP") log("STOP prioritaire envoyé.");
+  }
+
+  function bindDrivePad() {
+    document.querySelectorAll("#drivePad button").forEach(button => {
+      button.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        try { button.setPointerCapture(event.pointerId); } catch (_) {}
+        startDrive(button.dataset.drive);
+      });
+      button.addEventListener("pointerup", event => {
+        event.preventDefault();
+        if (button.dataset.drive !== "stop") stopDrive();
+      });
+      button.addEventListener("pointercancel", () => stopDrive("annulation"));
+      button.addEventListener("lostpointercapture", () => stopDrive("pointeur perdu"));
+      button.addEventListener("contextmenu", event => event.preventDefault());
+    });
+
+    document.querySelectorAll("#speedRow button").forEach(button => {
+      button.addEventListener("click", () => {
+        state.driveSpeed = Number(button.dataset.speed);
+        document.querySelectorAll("#speedRow button").forEach(b => b.classList.toggle("active", b === button));
+        log("Vitesse sélectionnée : " + button.textContent + " (d" + state.driveSpeed + ").");
+      });
+    });
+  }
+
+  async function sendAccessoryCommand(command) {
+    try {
+      const data = await fetchJson("/cmd", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({cmd: command})
+      }, 2200);
+      if (data.ok === false) throw new Error(data.error || "commande refusée");
+      return true;
+    } catch (error) {
+      log("Commande " + command + " impossible : " + error.message);
+      return false;
+    }
+  }
+
+  function clamp(value, low, high) { return Math.max(low, Math.min(high, value)); }
+
+  async function movePan(delta) {
+    state.pan = clamp(state.pan + delta, state.tilt >= 135 ? 60 : 50, state.tilt >= 135 ? 135 : 140);
+    $("panValue").textContent = state.pan;
+    await sendAccessoryCommand("p" + state.pan);
+  }
+
+  async function moveTilt(delta) {
+    state.tilt = clamp(state.tilt + delta, 68, 145);
+    if (state.tilt >= 135) state.pan = clamp(state.pan, 60, 135);
+    $("panValue").textContent = state.pan;
+    $("tiltValue").textContent = state.tilt;
+    if (state.tilt >= 135) await sendAccessoryCommand("p" + state.pan);
+    await sendAccessoryCommand("t" + state.tilt);
+  }
+
+  async function centerPanTilt() {
+    state.pan = 95;
+    state.tilt = 90;
+    $("panValue").textContent = state.pan;
+    $("tiltValue").textContent = state.tilt;
+    await sendAccessoryCommand("p95");
+    setTimeout(() => void sendAccessoryCommand("t90"), 180);
+  }
+
+  async function loadSwitch(path, buttonId, label, key) {
+    try {
+      const data = await fetchJson(path, {}, 6000);
+      state[key] = String(data.state).toLowerCase() === "on";
+      paintSwitch(buttonId, label, state[key], data.ok !== false);
+      return data.ok !== false;
+    } catch (_) {
+      paintSwitch(buttonId, label, false, false);
+      return false;
+    }
+  }
+
+  function paintSwitch(buttonId, label, on, ok=true) {
+    const button = $(buttonId);
+    button.textContent = label + (ok ? (on ? " ON" : " OFF") : " ERREUR");
+    button.className = ok ? (on ? "green" : "") : "red";
+  }
+
+  async function toggleSwitch(path, buttonId, label, key) {
+    const button = $(buttonId);
+    button.disabled = true;
+    button.textContent = label + " …";
+
+    // Relire l'état réel avant chaque bascule. Ainsi, même si une réponse
+    // précédente s'est perdue après avoir actionné le GPIO, le prochain clic
+    // enverra bien l'ordre inverse.
+    try {
+      const before = await fetchJson(path, {}, 6000);
+      if (before && (before.state === "on" || before.state === "off")) {
+        state[key] = before.state === "on";
+      }
+    } catch (_) {}
+
+    const desired = !state[key];
+    try {
+      const data = await fetchJson(path, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({state: desired ? "on" : "off"})
+      }, 8000);
+      if (data.ok === false) throw new Error(data.error || "commande refusée");
+      state[key] = String(data.state).toLowerCase() === "on";
+      paintSwitch(buttonId, label, state[key], true);
+      log(label + (state[key] ? " activé." : " désactivé."));
+    } catch (error) {
+      // La commande peut avoir été exécutée malgré une réponse perdue.
+      // Resynchroniser le bouton avec l'état GPIO plutôt que deviner.
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const synchronized = await loadSwitch(path, buttonId, label, key);
+      if (!synchronized) paintSwitch(buttonId, label, state[key], false);
+      log(label + " : réponse perdue ou erreur — état relu sur RB2.");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function normalizeLidarPoint(point) {
+    if (Array.isArray(point) && point.length >= 2) {
+      const x = Number(point[0]);
+      const y = Number(point[1]);
+      return Number.isFinite(x) && Number.isFinite(y) ? {x, y} : null;
+    }
+    if (!point || typeof point !== "object") return null;
+    let x = Number(point.x_cm ?? point.x);
+    let y = Number(point.y_cm ?? point.y);
+    if (!Number.isFinite(x) && point.x_mm !== undefined) x = Number(point.x_mm) / 10;
+    if (!Number.isFinite(y) && point.y_mm !== undefined) y = Number(point.y_mm) / 10;
+    return Number.isFinite(x) && Number.isFinite(y) ? {x, y} : null;
+  }
+
+  function cmText(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(0) : "—";
+  }
+
+  function drawLidarMap(payload) {
+    const canvas = $("lidarCanvas");
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(280, rect.width);
+    const height = Math.max(240, rect.height);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+
+    const context = canvas.getContext("2d");
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.fillStyle = "#030607";
+    context.fillRect(0, 0, width, height);
+
+    const response = payload || {};
+    const data = response.data || response;
+    const rawPoints = data.points_cm || response.points_cm || data.points || [];
+    const points = Array.isArray(rawPoints) ? rawPoints.map(normalizeLidarPoint).filter(Boolean) : [];
+    const clearance = response.clearance || data.clearance || data;
+    const centerX = width / 2;
+    const centerY = height * 0.58;
+    const visibleCm = 220 / state.lidarZoom;
+    const scale = Math.min(width, height) * 0.44 / visibleCm;
+
+    context.lineWidth = 1;
+    context.strokeStyle = "#1e2a31";
+    context.fillStyle = "#71808a";
+    context.font = "11px Arial";
+    for (let cm = 50; cm <= visibleCm; cm += 50) {
+      context.beginPath();
+      context.arc(centerX, centerY, cm * scale, 0, Math.PI * 2);
+      context.stroke();
+      context.fillText(cm + " cm", centerX + cm * scale + 4, centerY - 4);
+    }
+
+    context.strokeStyle = "#263943";
+    context.beginPath();
+    context.moveTo(centerX, 0);
+    context.lineTo(centerX, height);
+    context.moveTo(0, centerY);
+    context.lineTo(width, centerY);
+    context.stroke();
+
+    context.fillStyle = "#31d66b";
+    for (const point of points) {
+      const x = centerX + point.x * scale;
+      const y = centerY - point.y * scale;
+      if (x < 0 || x > width || y < 0 || y > height) continue;
+      context.beginPath();
+      context.arc(x, y, 2, 0, Math.PI * 2);
+      context.fill();
+    }
+
+    const robotWidth = 22 * scale;
+    const robotFront = 29 * scale;
+    const robotBack = 11 * scale;
+    context.fillStyle = "rgba(33, 118, 210, .42)";
+    context.strokeStyle = "#69b7ff";
+    context.lineWidth = 2;
+    context.fillRect(centerX - robotWidth / 2, centerY - robotFront, robotWidth, robotFront + robotBack);
+    context.strokeRect(centerX - robotWidth / 2, centerY - robotFront, robotWidth, robotFront + robotBack);
+    context.beginPath();
+    context.moveTo(centerX, centerY - robotFront - 13);
+    context.lineTo(centerX - 7, centerY - robotFront + 2);
+    context.lineTo(centerX + 7, centerY - robotFront + 2);
+    context.closePath();
+    context.fillStyle = "#69b7ff";
+    context.fill();
+
+    const summary = "AV " + cmText(clearance.front_cm) +
+      "   DR " + cmText(clearance.right_cm) +
+      "   AR " + cmText(clearance.back_cm) +
+      "   GA " + cmText(clearance.left_cm) +
+      "   MIN " + cmText(clearance.min_cm) + " cm";
+    context.fillStyle = "rgba(0, 0, 0, .72)";
+    context.fillRect(0, height - 30, width, 30);
+    context.fillStyle = "#d8e3ea";
+    context.font = "bold 12px Arial";
+    context.fillText(summary, 9, height - 10);
+
+    const age = Number(response.age_s);
+    const fresh = response.ok !== false && (!Number.isFinite(age) || age < 3);
+    const label = $("lidarState");
+    label.textContent = fresh
+      ? "LIDAR " + points.length + " points"
+      : "LIDAR ANCIEN";
+    label.style.borderColor = fresh ? "#29954d" : "#bd741b";
+    label.style.color = fresh ? "#8ff0ae" : "#ffd08a";
+  }
+
+  async function updateLidarMap() {
+    try {
+      const response = await fetchJson("/lidar_map", {}, 7000);
+      state.lastLidar = response;
+      drawLidarMap(response);
+    } catch (error) {
+      const label = $("lidarState");
+      label.textContent = "LIDAR ERREUR";
+      label.style.borderColor = "#c93b4e";
+      label.style.color = "#ff9ba8";
+    }
+  }
+
+  async function refreshWifi() {
+    try {
+      const data = await fetchJson("/rb2_network/status", {}, 6000);
+      const on = data.local_wifi === "ON";
+      const button = $("wifiBtn");
+      button.textContent = "Wi‑Fi local " + (on ? "ON" : "OFF");
+      button.className = on ? "green" : "red";
+      button.dataset.state = on ? "ON" : "OFF";
+    } catch (_) {
+      $("wifiBtn").textContent = "Wi‑Fi local ?";
+      $("wifiBtn").className = "orange";
+      $("wifiBtn").dataset.state = "UNKNOWN";
+    }
+  }
+
+  async function toggleWifi() {
+    const button = $("wifiBtn");
+    const current = button.dataset.state || "UNKNOWN";
+    const wording = current === "ON" ? "couper" : "réactiver";
+    if (!confirm("Voulez-vous " + wording + " le Wi‑Fi local wlan0 ?\n\nLe point d’accès RB2 10.42.0.1 ne sera pas touché.")) return;
+    button.disabled = true;
+    button.textContent = "Wi‑Fi local…";
+    try {
+      const data = await fetchJson("/rb2_network/toggle", {method: "POST"}, 18000);
+      const after = data.after || data.state || {};
+      const on = after.local_wifi === "ON";
+      button.dataset.state = on ? "ON" : "OFF";
+      button.textContent = "Wi‑Fi local " + (on ? "ON" : "OFF");
+      button.className = on ? "green" : "red";
+      log("Wi‑Fi local " + (on ? "réactivé." : "désactivé."));
+    } catch (error) {
+      if (current === "ON") {
+        button.dataset.state = "OFF";
+        button.textContent = "Wi‑Fi local OFF ?";
+        button.className = "red";
+        log("Connexion perdue pendant la coupure de wlan0; cela peut être normal.");
+      } else {
+        log("Bascule Wi‑Fi impossible : " + error.message);
+      }
+    } finally {
+      button.disabled = false;
+      setTimeout(() => void refreshWifi(), 2500);
+    }
+  }
+
+  async function lidarMapLoop() {
+    if (state.lidarStopped) return;
+    if (document.hidden) {
+      state.lidarTimer = setTimeout(lidarMapLoop, 2000);
+      return;
+    }
+
+    try {
+      await updateLidarMap();
+      if (state.lidarTick % 20 === 0) await refreshWifi();
+      state.lidarTick += 1;
+    } finally {
+      state.lidarTimer = setTimeout(lidarMapLoop, 2000);
+    }
+  }
+
+  function reloadCamera() {
+    $("cameraState").textContent = "reconnexion…";
+    $("camera").src = "/zero_cam_stream.mjpg?t=" + Date.now();
+  }
+
+  async function cameraAction(path, buttonId, pendingText, timeoutMs=12000) {
+    const button = $(buttonId);
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = pendingText;
+    try {
+      const data = await fetchJson(path, {method: "POST"}, timeoutMs);
+      if (data.ok === false) throw new Error(data.error || data.stderr || "échec");
+      log(original + " : commande réussie.");
+      return true;
+    } catch (error) {
+      log(original + " : " + error.message);
+      return false;
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  async function updateVideoStatus() {
+    try {
+      const data = await fetchJson("/zero_video_status", {}, 4500);
+      state.videoOn = !!(data.recording || data.video_on || data.active || data.on);
+      $("videoBtn").textContent = state.videoOn ? "ARRÊTER VIDÉO" : "VIDÉO";
+      $("videoBtn").className = state.videoOn ? "red" : "orange";
+    } catch (_) {
+      $("videoBtn").textContent = "VIDÉO ?";
+    }
+  }
+
+  async function shutdownRb2() {
+    if (!confirm("Confirmer l’arrêt complet de RB2 ?\n\nLe Zero 2 W sera arrêté, puis le Raspberry Pi 5.")) return;
+    stopDrive("arrêt système");
+    const button = $("shutdownBtn");
+    button.disabled = true;
+    button.textContent = "ARRÊT EN COURS…";
+    try {
+      const data = await fetchJson("/system_shutdown_all", {method: "POST"}, 5000);
+      if (data.ok === false) throw new Error(data.error || "échec");
+      log("Arrêt complet demandé.");
+    } catch (error) {
+      log("Réponse d’arrêt perdue : " + error.message + ". Vérifiez si RB2 s’éteint.");
+    }
+  }
+
+  function bindControls() {
+    bindDrivePad();
+    $("panLeftBtn").addEventListener("click", () => void movePan(-5));
+    $("panRightBtn").addEventListener("click", () => void movePan(5));
+    $("tiltUpBtn").addEventListener("click", () => void moveTilt(5));
+    $("tiltDownBtn").addEventListener("click", () => void moveTilt(-5));
+    $("centerPtBtn").addEventListener("click", () => void centerPanTilt());
+    $("tiltLowBtn").addEventListener("click", () => { state.tilt = 68; $("tiltValue").textContent = "68"; void sendAccessoryCommand("t68"); });
+    $("lightBtn").addEventListener("click", () => void toggleSwitch("/light", "lightBtn", "LUMIÈRES", "lightOn"));
+    $("relay2Btn").addEventListener("click", () => void toggleSwitch("/relay2", "relay2Btn", "RELAIS 2", "relay2On"));
+    $("wifiBtn").addEventListener("click", () => void toggleWifi());
+    $("lidarZoomOutBtn").addEventListener("click", () => {
+      state.lidarZoom = Math.max(.45, state.lidarZoom / 1.25);
+      if (state.lastLidar) drawLidarMap(state.lastLidar);
+    });
+    $("lidarZoomInBtn").addEventListener("click", () => {
+      state.lidarZoom = Math.min(3, state.lidarZoom * 1.25);
+      if (state.lastLidar) drawLidarMap(state.lastLidar);
+    });
+    $("reloadCameraBtn").addEventListener("click", reloadCamera);
+    $("photoBtn").addEventListener("click", () => void cameraAction("/zero_photo", "photoBtn", "PHOTO…"));
+    $("videoBtn").addEventListener("click", async () => {
+      if (await cameraAction("/zero_video_toggle", "videoBtn", "VIDÉO…")) setTimeout(() => void updateVideoStatus(), 500);
+    });
+    $("restartCameraBtn").addEventListener("click", async () => {
+      if (!confirm("Redémarrer seulement le service caméra du Zero 2 W ?")) return;
+      if (await cameraAction("/zero_cam_restart", "restartCameraBtn", "RESTART…", 80000)) setTimeout(reloadCamera, 1500);
+    });
+    $("shutdownBtn").addEventListener("click", () => void shutdownRb2());
+
+    $("camera").addEventListener("load", () => { $("cameraState").textContent = "flux actif"; });
+    $("camera").addEventListener("error", () => { $("cameraState").textContent = "flux en erreur — recharger"; });
+  }
+
+  function emergencyStopBeacon() {
+    try {
+      const payload = JSON.stringify(buildDrivePayload("d0,0"));
+      navigator.sendBeacon("/cmd", new Blob([payload], {type: "application/json"}));
+    } catch (_) {}
+  }
+
+  async function initialize() {
+    bindControls();
+    paintDrive("stop");
+    await syncServerClock(false);
+    // Initialisation volontairement séquentielle : aucune rafale de requêtes
+    // au chargement pendant que le flux MJPEG établit sa connexion.
+    await loadSwitch("/light", "lightBtn", "LUMIÈRES", "lightOn");
+    await loadSwitch("/relay2", "relay2Btn", "RELAIS 2", "relay2On");
+    await refreshWifi();
+    await updateVideoStatus();
+    lidarMapLoop();
+  }
+
+  window.addEventListener("blur", () => stopDrive("fenêtre inactive"));
+  window.addEventListener("offline", () => stopDrive("hors ligne"));
+  window.addEventListener("beforeunload", emergencyStopBeacon);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopDrive("onglet masqué");
+  });
+  window.addEventListener("resize", () => {
+    if (state.lastLidar) drawLidarMap(state.lastLidar);
+  });
+  document.addEventListener("DOMContentLoaded", () => void initialize());
+  </script>
+</body>
+</html>
