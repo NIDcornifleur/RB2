@@ -8106,7 +8106,7 @@ setInterval(statusLoop, 2000);
     return (
       txt.includes("retour") &&
       txt.includes("terrain") &&
-      (href === "/terrain" || onclick.includes("terrain"))
+      (href === "/terrain" || href === "/terrain4" || onclick.includes("terrain"))
     );
   }
 
