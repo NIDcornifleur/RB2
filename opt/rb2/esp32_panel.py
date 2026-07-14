@@ -8036,10 +8036,10 @@ a { color:white; }
 
     <div class="secours-title-row">
       <div class="secours-title-text">RB2 - SECOURS</div>
-      <a class="secours-retour-terrain" href="/terrain">Retour /terrain</a>
+      <a class="secours-retour-terrain" href="/terrain4">Retour /terrain4</a>
     </div>
 
-<a class="secours-retour-terrain" href="/terrain">Retour /terrain</a>
+<a class="secours-retour-terrain" href="/terrain4">Retour /terrain4</a>
     </div>
  </div>
 
