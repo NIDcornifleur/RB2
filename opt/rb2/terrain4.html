@@ -299,6 +299,10 @@
             <button id="lidarZoomOutBtn" type="button">ZOOM −</button>
             <button id="lidarZoomInBtn" type="button">ZOOM +</button>
           </div>
+          <div class="button-row two">
+            <button id="wifi24gBtn" type="button">2,4G</button>
+            <button id="wifi5gBtn" type="button">5G</button>
+          </div>
         </div>
       </div>
     </section>
@@ -761,6 +765,15 @@
     }
   }
 
+  function paintBandButtons(band) {
+    const b24 = $("wifi24gBtn");
+    const b5 = $("wifi5gBtn");
+    b24.textContent = "2,4G";
+    b5.textContent = "5G";
+    b24.className = band === "24G" ? "green" : "";
+    b5.className = band === "5G" ? "green" : "";
+  }
+
   async function refreshWifi() {
     try {
       const data = await fetchJson("/rb2_network/status", {}, 6000);
@@ -769,11 +782,55 @@
       button.textContent = "Wi‑Fi local " + (on ? "ON" : "OFF");
       button.className = on ? "green" : "red";
       button.dataset.state = on ? "ON" : "OFF";
+      paintBandButtons(data.band || "UNKNOWN");
     } catch (_) {
       $("wifiBtn").textContent = "Wi‑Fi local ?";
       $("wifiBtn").className = "orange";
       $("wifiBtn").dataset.state = "UNKNOWN";
     }
+  }
+
+  async function switchWifiBand(path, buttonId, targetBand, pendingText) {
+    const button = $(buttonId);
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = pendingText;
+
+    try {
+      const data = await fetchJson(path, {method: "POST"}, 12000);
+      if (data.ok === false) throw new Error((data.result && data.result.output) || data.error || "échec");
+    } catch (error) {
+      log(original + " : " + error.message);
+      button.textContent = original + " ERREUR";
+      button.className = "red";
+      button.disabled = false;
+      return;
+    }
+
+    // La commande a été acceptée, mais la ré-association Wi-Fi puis le bail
+    // DHCP prennent quelques secondes de plus (variable). On sonde le statut
+    // au lieu de se fier à un délai fixe unique, avec une marge de 20 s avant
+    // de déclarer une vraie ERREUR.
+    button.textContent = pendingText + " (confirmation…)";
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      try {
+        const status = await fetchJson("/rb2_network/status", {}, 4000);
+        if (status.band === targetBand) {
+          log(original + " : bascule confirmée.");
+          paintBandButtons(status.band);
+          button.textContent = original;
+          button.disabled = false;
+          return;
+        }
+      } catch (_) {}
+    }
+
+    log(original + " : bande non confirmée après 20 s.");
+    button.textContent = original + " ERREUR";
+    button.className = "red";
+    button.disabled = false;
   }
 
   async function toggleWifi() {
@@ -883,6 +940,8 @@
     $("lightBtn").addEventListener("click", () => void toggleSwitch("/light", "lightBtn", "LUMIÈRES", "lightOn"));
     $("relay2Btn").addEventListener("click", () => void toggleSwitch("/relay2", "relay2Btn", "RELAIS 2", "relay2On"));
     $("wifiBtn").addEventListener("click", () => void toggleWifi());
+    $("wifi24gBtn").addEventListener("click", () => void switchWifiBand("/rb2_network/wifi_24g", "wifi24gBtn", "24G", "2,4G…"));
+    $("wifi5gBtn").addEventListener("click", () => void switchWifiBand("/rb2_network/wifi_5g", "wifi5gBtn", "5G", "5G…"));
     $("lidarZoomOutBtn").addEventListener("click", () => {
       state.lidarZoom = Math.max(.45, state.lidarZoom / 1.25);
       if (state.lastLidar) drawLidarMap(state.lastLidar);

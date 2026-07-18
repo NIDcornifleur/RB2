@@ -16613,7 +16613,7 @@ _RB2_WIFI_SCRIPT = "/usr/local/sbin/rb2-wifi-mode"
 _RB2_LOCAL_WIFI_IF = "wlan0"
 
 def _rb2_wifi_run(action):
-    if action not in ("terrain", "bureau", "status"):
+    if action not in ("terrain", "bureau", "wifi_24g", "wifi_5g", "status"):
         return {
             "ok": False,
             "action": action,
@@ -16647,6 +16647,49 @@ def _rb2_wifi_run(action):
             "output": str(e),
             "returncode": 99,
         }
+
+def _rb2_wlan0_ssid():
+    # iwgetid (wireless-tools) n'est pas garanti présent sur les images récentes
+    # gérées par NetworkManager ; on retombe sur nmcli --rescan no (pas de scan,
+    # lit juste la connexion active) si iwgetid est absent ou muet.
+    try:
+        p = _rb2_wifi_subprocess.run(
+            ["iwgetid", "-r", _RB2_LOCAL_WIFI_IF],
+            text=True,
+            stdout=_rb2_wifi_subprocess.PIPE,
+            stderr=_rb2_wifi_subprocess.DEVNULL,
+            timeout=3,
+        )
+        ssid = p.stdout.strip()
+        if ssid:
+            return ssid
+    except Exception:
+        pass
+
+    try:
+        p = _rb2_wifi_subprocess.run(
+            ["nmcli", "-t", "-f", "active,ssid", "device", "wifi", "list",
+             "ifname", _RB2_LOCAL_WIFI_IF, "--rescan", "no"],
+            text=True,
+            stdout=_rb2_wifi_subprocess.PIPE,
+            stderr=_rb2_wifi_subprocess.DEVNULL,
+            timeout=4,
+        )
+        for line in p.stdout.splitlines():
+            if line.startswith("yes:"):
+                return line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+
+    return ""
+
+def _rb2_wlan0_band(ssid):
+    s = ssid.lower().replace(",", ".")
+    if "5g" in s:
+        return "5G"
+    if "2.4g" in s:
+        return "24G"
+    return "UNKNOWN"
 
 def _rb2_wlan0_state():
     ip_line = ""
@@ -16691,6 +16734,11 @@ def _rb2_wlan0_state():
     # Pour RB2, on considère le Wi-Fi local ON seulement si wlan0 est UP avec une IPv4.
     local_on = (admin_state == "UP" and has_ipv4)
 
+    # SSID/bande lus indépendamment de has_ipv4 : l'association Wi-Fi (L2) a
+    # lieu avant la fin du bail DHCP, donc la bande est connue plus tôt.
+    ssid = _rb2_wlan0_ssid()
+    band = _rb2_wlan0_band(ssid)
+
     return {
         "ok": True,
         "interface": _RB2_LOCAL_WIFI_IF,
@@ -16699,6 +16747,8 @@ def _rb2_wlan0_state():
         "has_ipv4": has_ipv4,
         "ip_line": ip_line,
         "nmcli_line": nmcli_line,
+        "ssid": ssid,
+        "band": band,
     }
 
 @app.route("/rb2_network/status", methods=["GET"])
@@ -16725,6 +16775,30 @@ def rb2_network_bureau():
     return _rb2_wifi_jsonify({
         "ok": result.get("ok", False),
         "action": "bureau",
+        "result": result,
+        "state": state,
+    })
+
+@app.route("/rb2_network/wifi_24g", methods=["POST"])
+def rb2_network_wifi_24g():
+    result = _rb2_wifi_run("wifi_24g")
+    _rb2_wifi_time.sleep(1.5)
+    state = _rb2_wlan0_state()
+    return _rb2_wifi_jsonify({
+        "ok": result.get("ok", False),
+        "action": "wifi_24g",
+        "result": result,
+        "state": state,
+    })
+
+@app.route("/rb2_network/wifi_5g", methods=["POST"])
+def rb2_network_wifi_5g():
+    result = _rb2_wifi_run("wifi_5g")
+    _rb2_wifi_time.sleep(1.5)
+    state = _rb2_wlan0_state()
+    return _rb2_wifi_jsonify({
+        "ok": result.get("ok", False),
+        "action": "wifi_5g",
         "result": result,
         "state": state,
     })
