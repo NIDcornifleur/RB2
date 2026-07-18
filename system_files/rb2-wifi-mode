@@ -6,8 +6,64 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 LOCAL_IF="wlan0"
 AP_IF="wlxXXXXXXXXXXXX"
 ZERO_IF="eth0"
+WIFI_5G_CONF="/etc/rb2-wifi-5g.conf"
 
 action="${1:-status}"
+
+network_id_for_ssid() {
+  local target_ssid="$1"
+  wpa_cli -i "$LOCAL_IF" list_networks 2>/dev/null | awk -F'\t' -v ssid="$target_ssid" '$2==ssid {print $1; exit}'
+}
+
+select_by_ssid() {
+  local target_ssid="$1"
+  local id
+  id=$(network_id_for_ssid "$target_ssid")
+  if [ -z "$id" ]; then
+    echo "SSID_NOT_FOUND:$target_ssid"
+    return 1
+  fi
+  ip link set "$LOCAL_IF" up >/dev/null 2>&1 || true
+  wpa_cli -i "$LOCAL_IF" select_network "$id" >/dev/null 2>&1
+  echo "SELECTED:$target_ssid(id=$id)"
+}
+
+# WIFI-MAISON-5G n'est volontairement pas dans le netplan permanent (pas de champ
+# priorité côté netplan pour forcer le 2,4G au démarrage) : ce réseau est ajouté
+# ici à la volée, seulement en mémoire (jamais sauvegardé), donc un redémarrage
+# du Pi revient toujours au 2,4G par défaut sans intervention.
+select_5g() {
+  if [ ! -r "$WIFI_5G_CONF" ]; then
+    echo "CONF_5G_MANQUANTE:$WIFI_5G_CONF"
+    return 1
+  fi
+
+  local WIFI_5G_SSID WIFI_5G_PSK
+  # shellcheck disable=SC1090
+  . "$WIFI_5G_CONF"
+
+  if [ -z "${WIFI_5G_SSID:-}" ] || [ -z "${WIFI_5G_PSK:-}" ]; then
+    echo "CONF_5G_INCOMPLETE"
+    return 1
+  fi
+
+  local id
+  id=$(network_id_for_ssid "$WIFI_5G_SSID")
+  if [ -z "$id" ]; then
+    id=$(wpa_cli -i "$LOCAL_IF" add_network 2>/dev/null)
+    if ! [[ "$id" =~ ^[0-9]+$ ]]; then
+      echo "ECHEC_AJOUT_RESEAU_5G"
+      return 1
+    fi
+    wpa_cli -i "$LOCAL_IF" set_network "$id" ssid "\"$WIFI_5G_SSID\"" >/dev/null 2>&1
+    wpa_cli -i "$LOCAL_IF" set_network "$id" psk "\"$WIFI_5G_PSK\"" >/dev/null 2>&1
+    wpa_cli -i "$LOCAL_IF" enable_network "$id" >/dev/null 2>&1
+  fi
+
+  ip link set "$LOCAL_IF" up >/dev/null 2>&1 || true
+  wpa_cli -i "$LOCAL_IF" select_network "$id" >/dev/null 2>&1
+  echo "SELECTED:$WIFI_5G_SSID(id=$id)"
+}
 
 status_report() {
   echo "=== RB2 NETWORK MODE STATUS ==="
@@ -52,12 +108,22 @@ case "$action" in
     echo "AP RB2 conservé sur $AP_IF."
     ;;
 
+  wifi_24g)
+    echo "Bascule vers bande 2,4 GHz (WIFI-MAISON-2.4G)."
+    select_by_ssid "WIFI-MAISON-2.4G"
+    ;;
+
+  wifi_5g)
+    echo "Bascule vers bande 5 GHz (WIFI-MAISON-5G)."
+    select_5g
+    ;;
+
   status)
     status_report
     ;;
 
   *)
-    echo "Usage: $0 {terrain|bureau|status}" >&2
+    echo "Usage: $0 {terrain|bureau|wifi_24g|wifi_5g|status}" >&2
     exit 2
     ;;
 esac
