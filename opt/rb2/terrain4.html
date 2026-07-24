@@ -277,7 +277,7 @@
       <div class="visual-grid">
         <div class="card">
           <div class="camera-frame">
-            <img id="camera" src="/zero_cam_stream.mjpg" alt="Caméra RB2">
+            <canvas id="camera"></canvas>
             <span id="cameraState">connexion…</span>
           </div>
           <div class="button-row">
@@ -348,9 +348,6 @@
   <script>
   "use strict";
 
-  // lidarMapLoop tourne toutes les 2s -> 10 ticks = rechargement caméra toutes les 20s.
-  const CAMERA_AUTO_RELOAD_TICKS = 10;
-
   const state = {
     driveToken: "terrain4-" + Date.now() + "-" + Math.floor(Math.random() * 1e9),
     driveSeq: 0,
@@ -371,7 +368,10 @@
     lidarStopped: false,
     lidarZoom: 1.0,
     lastLidar: null,
-    lastRtt: null
+    lastRtt: null,
+    camGeneration: 0,
+    camDecoding: false,
+    camPendingFrame: null
   };
 
   const $ = id => document.getElementById(id);
@@ -876,21 +876,120 @@
     try {
       await updateLidarMap();
       if (state.lidarTick % 20 === 0) await refreshWifi();
-      // Un flux MJPEG en <img> n'a pas de mécanisme de saut d'image : si le
-      // thread JS de la page est occupé (fetch+dessin de la carte LIDAR
-      // toutes les 2s), le décodage prend du retard qui ne se résorbe
-      // jamais tout seul et grandit indéfiniment. On recharge donc l'image
-      // périodiquement pour purger ce retard accumulé.
-      if (state.lidarTick > 0 && state.lidarTick % CAMERA_AUTO_RELOAD_TICKS === 0) reloadCamera();
       state.lidarTick += 1;
     } finally {
       state.lidarTimer = setTimeout(lidarMapLoop, 2000);
     }
   }
 
+  // Visionneuse caméra "dernière image seulement" : un <img> multipart/x-mixed-replace
+  // n'a aucun mécanisme de saut d'image, donc le moindre retard de décodage
+  // s'accumule pour toujours tant que la connexion reste ouverte (constaté en
+  // conditions réelles : plusieurs secondes de lag, non résorbées par un simple
+  // rechargement périodique). Ici on lit le flux nous-mêmes en JS, on découpe les
+  // trames JPEG (marqueurs SOI/EOI) et on ne décode/affiche jamais que la plus
+  // récente trame complète disponible, en jetant les plus vieilles — le retard
+  // reste donc borné au temps réseau + un décodage, quelle que soit la charge du
+  // thread JS de la page.
+  function concatBytes(a, b) {
+    const out = new Uint8Array(a.length + b.length);
+    out.set(a, 0);
+    out.set(b, a.length);
+    return out;
+  }
+
+  function indexOfMarker(buf, b0, b1, from) {
+    const end = buf.length - 1;
+    for (let i = from; i < end; i++) {
+      if (buf[i] === b0 && buf[i + 1] === b1) return i;
+    }
+    return -1;
+  }
+
+  // Extrait la dernière trame JPEG complète du buffer, si présente. Rend aussi
+  // le reste du buffer (après la dernière trame consommée) pour la suite.
+  function extractLatestFrame(buf) {
+    let searchFrom = 0;
+    let lastFrame = null;
+    let lastFrameEnd = 0;
+    while (true) {
+      const soi = indexOfMarker(buf, 0xff, 0xd8, searchFrom);
+      if (soi === -1) break;
+      const eoi = indexOfMarker(buf, 0xff, 0xd9, soi + 2);
+      if (eoi === -1) break;
+      lastFrame = buf.subarray(soi, eoi + 2);
+      lastFrameEnd = eoi + 2;
+      searchFrom = eoi + 2;
+    }
+    if (lastFrame) return { frame: lastFrame, rest: buf.subarray(lastFrameEnd) };
+    // Aucune trame complète : sécurité anti-dérive mémoire si le flux est corrompu.
+    if (buf.length > 3_000_000) return { frame: null, rest: new Uint8Array(0) };
+    return { frame: null, rest: buf };
+  }
+
+  function drawCameraBitmap(bitmap) {
+    const canvas = $("camera");
+    if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+    }
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+  }
+
+  async function handleNewCameraFrame(frameBytes) {
+    state.camPendingFrame = frameBytes;
+    if (state.camDecoding) return;
+    while (state.camPendingFrame) {
+      const toDecode = state.camPendingFrame;
+      state.camPendingFrame = null;
+      state.camDecoding = true;
+      try {
+        const bitmap = await createImageBitmap(new Blob([toDecode], {type: "image/jpeg"}));
+        drawCameraBitmap(bitmap);
+        bitmap.close();
+      } catch (_) {
+        // Trame corrompue (coupée en plein milieu) : on l'ignore, la suivante arrive vite.
+      } finally {
+        state.camDecoding = false;
+      }
+    }
+  }
+
+  async function runCameraViewer(generation) {
+    while (generation === state.camGeneration) {
+      try {
+        const response = await fetch("/zero_cam_stream.mjpg?t=" + Date.now(), {cache: "no-store"});
+        if (!response.ok || !response.body) throw new Error("HTTP " + response.status);
+        const reader = response.body.getReader();
+        let buf = new Uint8Array(0);
+        let connected = false;
+        while (generation === state.camGeneration) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          buf = concatBytes(buf, value);
+          const extracted = extractLatestFrame(buf);
+          buf = extracted.rest;
+          if (extracted.frame) {
+            if (!connected) {
+              connected = true;
+              $("cameraState").textContent = "flux actif";
+            }
+            void handleNewCameraFrame(extracted.frame);
+          }
+        }
+        if (generation === state.camGeneration) throw new Error("flux terminé");
+      } catch (error) {
+        if (generation !== state.camGeneration) return;
+        $("cameraState").textContent = "flux en erreur — reconnexion…";
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+  }
+
   function reloadCamera() {
+    state.camGeneration += 1;
     $("cameraState").textContent = "reconnexion…";
-    $("camera").src = "/zero_cam_stream.mjpg?t=" + Date.now();
+    void runCameraViewer(state.camGeneration);
   }
 
   async function cameraAction(path, buttonId, pendingText, timeoutMs=12000) {
@@ -969,9 +1068,6 @@
       if (await cameraAction("/zero_cam_restart", "restartCameraBtn", "RESTART…", 80000)) setTimeout(reloadCamera, 1500);
     });
     $("shutdownBtn").addEventListener("click", () => void shutdownRb2());
-
-    $("camera").addEventListener("load", () => { $("cameraState").textContent = "flux actif"; });
-    $("camera").addEventListener("error", () => { $("cameraState").textContent = "flux en erreur — recharger"; });
   }
 
   function emergencyStopBeacon() {
@@ -991,6 +1087,7 @@
     await loadSwitch("/relay2", "relay2Btn", "RELAIS 2", "relay2On");
     await refreshWifi();
     await updateVideoStatus();
+    reloadCamera();
     lidarMapLoop();
   }
 
