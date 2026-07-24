@@ -348,6 +348,9 @@
   <script>
   "use strict";
 
+  // lidarMapLoop tourne toutes les 2s -> 10 ticks = rechargement caméra toutes les 20s.
+  const CAMERA_AUTO_RELOAD_TICKS = 10;
+
   const state = {
     driveToken: "terrain4-" + Date.now() + "-" + Math.floor(Math.random() * 1e9),
     driveSeq: 0,
@@ -873,6 +876,12 @@
     try {
       await updateLidarMap();
       if (state.lidarTick % 20 === 0) await refreshWifi();
+      // Un flux MJPEG en <img> n'a pas de mécanisme de saut d'image : si le
+      // thread JS de la page est occupé (fetch+dessin de la carte LIDAR
+      // toutes les 2s), le décodage prend du retard qui ne se résorbe
+      // jamais tout seul et grandit indéfiniment. On recharge donc l'image
+      // périodiquement pour purger ce retard accumulé.
+      if (state.lidarTick > 0 && state.lidarTick % CAMERA_AUTO_RELOAD_TICKS === 0) reloadCamera();
       state.lidarTick += 1;
     } finally {
       state.lidarTimer = setTimeout(lidarMapLoop, 2000);
