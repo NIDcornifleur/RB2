@@ -199,6 +199,7 @@
     }
 
     .two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .one { grid-template-columns: 1fr; }
 
     .lidar-frame {
       position: relative;
@@ -299,8 +300,7 @@
             <button id="lidarZoomOutBtn" type="button">ZOOM −</button>
             <button id="lidarZoomInBtn" type="button">ZOOM +</button>
           </div>
-          <div class="button-row two">
-            <button id="wifi24gBtn" type="button">2,4G</button>
+          <div class="button-row one">
             <button id="wifi5gBtn" type="button">5G</button>
           </div>
         </div>
@@ -769,11 +769,8 @@
   }
 
   function paintBandButtons(band) {
-    const b24 = $("wifi24gBtn");
     const b5 = $("wifi5gBtn");
-    b24.textContent = "2,4G";
     b5.textContent = "5G";
-    b24.className = band === "24G" ? "green" : "";
     b5.className = band === "5G" ? "green" : "";
   }
 
@@ -1048,7 +1045,6 @@
     $("lightBtn").addEventListener("click", () => void toggleSwitch("/light", "lightBtn", "LUMIÈRES", "lightOn"));
     $("relay2Btn").addEventListener("click", () => void toggleSwitch("/relay2", "relay2Btn", "RELAIS 2", "relay2On"));
     $("wifiBtn").addEventListener("click", () => void toggleWifi());
-    $("wifi24gBtn").addEventListener("click", () => void switchWifiBand("/rb2_network/wifi_24g", "wifi24gBtn", "24G", "2,4G…"));
     $("wifi5gBtn").addEventListener("click", () => void switchWifiBand("/rb2_network/wifi_5g", "wifi5gBtn", "5G", "5G…"));
     $("lidarZoomOutBtn").addEventListener("click", () => {
       state.lidarZoom = Math.max(.45, state.lidarZoom / 1.25);
