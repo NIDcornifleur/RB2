@@ -65,6 +65,40 @@ select_5g() {
   echo "SELECTED:$WIFI_5G_SSID(id=$id)"
 }
 
+# Rejoint un réseau Wi-Fi arbitraire (site client) sur wlan0, via nmcli qui
+# gère à la fois l'ajout du profil et la connexion en une seule commande, et
+# persiste le profil normalement (contrairement à select_5g ci-dessus, pas de
+# raison ici d'éviter la persistance : ce SSID ne sera plus à portée une fois
+# RB2 reparti du site). Mot de passe vide accepté (réseau ouvert).
+connect_ssid() {
+  local target_ssid="$1"
+  local target_pass="${2:-}"
+
+  if [ -z "$target_ssid" ]; then
+    echo "SSID_VIDE"
+    return 1
+  fi
+
+  ip link set "$LOCAL_IF" up >/dev/null 2>&1 || true
+  nmcli device set "$LOCAL_IF" managed yes >/dev/null 2>&1 || true
+
+  local out rc
+  if [ -n "$target_pass" ]; then
+    out=$(nmcli --wait 25 device wifi connect "$target_ssid" password "$target_pass" ifname "$LOCAL_IF" 2>&1)
+  else
+    out=$(nmcli --wait 25 device wifi connect "$target_ssid" ifname "$LOCAL_IF" 2>&1)
+  fi
+  rc=$?
+
+  if [ $rc -eq 0 ]; then
+    echo "CONNECTE:$target_ssid"
+  else
+    echo "ECHEC_CONNEXION:$target_ssid"
+    echo "$out"
+  fi
+  return $rc
+}
+
 status_report() {
   echo "=== RB2 NETWORK MODE STATUS ==="
   echo
@@ -118,12 +152,17 @@ case "$action" in
     select_5g
     ;;
 
+  connect_ssid)
+    echo "Connexion à un réseau Wi-Fi client (SSID fourni)."
+    connect_ssid "${2:-}" "${3:-}"
+    ;;
+
   status)
     status_report
     ;;
 
   *)
-    echo "Usage: $0 {terrain|bureau|wifi_24g|wifi_5g|status}" >&2
+    echo "Usage: $0 {terrain|bureau|wifi_24g|wifi_5g|connect_ssid SSID [MOT_DE_PASSE]|status}" >&2
     exit 2
     ;;
 esac
