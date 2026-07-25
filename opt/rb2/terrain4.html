@@ -958,7 +958,7 @@
           void refreshWifi();
           setTimeout(closeSsidModal, 1200);
         } else {
-          msg.textContent = "Connexion non confirmée après coup (RB2 a peut-être basculé vers un réseau connu à priorité plus haute).";
+          msg.textContent = "Connexion non confirmée après coup — réessayer.";
           msg.className = "modal-msg error";
           log("Wi‑Fi client : connexion à " + ssid + " non confirmée.");
           btn.disabled = false;

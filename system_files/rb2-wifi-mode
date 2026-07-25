@@ -65,6 +65,34 @@ select_5g() {
   echo "SELECTED:$WIFI_5G_SSID(id=$id)"
 }
 
+# Désactive l'auto-reconnexion de tous les profils Wi-Fi connus sauf celui
+# qu'on garde (nom vide = aucune exception). Sert à empêcher un réseau connu
+# épinglé en priorité (ex. WIFI-MAISON-5G-nanoHD, autoconnect-priority=10) de
+# reprendre la main tout seul après une connexion explicite à un SSID client :
+# quand l'opérateur demande ce SSID précis, c'est un ordre, pas une préférence
+# parmi d'autres.
+disable_other_wifi_autoconnect() {
+  local keep_name="${1:-}"
+  local name type
+  while IFS=: read -r name type; do
+    [ "$type" = "802-11-wireless" ] || continue
+    [ -n "$keep_name" ] && [ "$name" = "$keep_name" ] && continue
+    nmcli connection modify "$name" connection.autoconnect no >/dev/null 2>&1 || true
+  done < <(nmcli -t -f NAME,TYPE connection show)
+}
+
+# Réactive l'auto-reconnexion de tous les profils Wi-Fi connus. Appelé par
+# bureau/wifi_24g/wifi_5g : ce sont les actions explicites de retour au
+# réseau habituel, donc le moment logique de lever le blocage posé par
+# connect_ssid.
+restore_wifi_autoconnect() {
+  local name type
+  while IFS=: read -r name type; do
+    [ "$type" = "802-11-wireless" ] || continue
+    nmcli connection modify "$name" connection.autoconnect yes >/dev/null 2>&1 || true
+  done < <(nmcli -t -f NAME,TYPE connection show)
+}
+
 # Rejoint un réseau Wi-Fi arbitraire (site client) sur wlan0, via nmcli qui
 # gère à la fois l'ajout du profil et la connexion en une seule commande, et
 # persiste le profil normalement (contrairement à select_5g ci-dessus, pas de
@@ -82,6 +110,9 @@ connect_ssid() {
   ip link set "$LOCAL_IF" up >/dev/null 2>&1 || true
   nmcli device set "$LOCAL_IF" managed yes >/dev/null 2>&1 || true
 
+  # Ordre explicite de l'opérateur : ce SSID doit gagner, sans discussion.
+  disable_other_wifi_autoconnect "$target_ssid"
+
   local out rc
   if [ -n "$target_pass" ]; then
     out=$(nmcli --wait 25 device wifi connect "$target_ssid" password "$target_pass" ifname "$LOCAL_IF" 2>&1)
@@ -91,6 +122,10 @@ connect_ssid() {
   rc=$?
 
   if [ $rc -eq 0 ]; then
+    # Priorité maximale pour que ce profil gagne aussi toute réévaluation
+    # future tant qu'il existe, même si un autre profil était réactivé
+    # entretemps.
+    nmcli connection modify "$target_ssid" connection.autoconnect-priority 999 >/dev/null 2>&1 || true
     echo "CONNECTE:$target_ssid"
   else
     echo "ECHEC_CONNEXION:$target_ssid"
@@ -125,6 +160,7 @@ case "$action" in
 
   bureau)
     echo "Passage en MODE BUREAU : réactivation du Wi-Fi local wlan0."
+    restore_wifi_autoconnect
     ip link set "$LOCAL_IF" up >/dev/null 2>&1 || true
     nmcli device set "$LOCAL_IF" managed yes >/dev/null 2>&1 || true
     sleep 1
@@ -144,11 +180,13 @@ case "$action" in
 
   wifi_24g)
     echo "Bascule vers bande 2,4 GHz (WIFI-MAISON-2.4G)."
+    restore_wifi_autoconnect
     select_by_ssid "WIFI-MAISON-2.4G"
     ;;
 
   wifi_5g)
     echo "Bascule vers bande 5 GHz (WIFI-MAISON-5G)."
+    restore_wifi_autoconnect
     select_5g
     ;;
 
