@@ -93,6 +93,25 @@ restore_wifi_autoconnect() {
   done < <(nmcli -t -f NAME,TYPE connection show)
 }
 
+# Réactive wlan0 et le connecte au meilleur profil Wi-Fi local connu et
+# disponible (le "device connect" seul ne suffit pas s'il ne trouve rien,
+# d'où le repli qui tente chaque profil 802-11-wireless connu un par un).
+# Partagé entre bureau et disconnect_client.
+reconnect_local_wifi() {
+  ip link set "$LOCAL_IF" up >/dev/null 2>&1 || true
+  nmcli device set "$LOCAL_IF" managed yes >/dev/null 2>&1 || true
+  sleep 1
+  nmcli device connect "$LOCAL_IF" >/dev/null 2>&1 || true
+
+  if ! ip -4 addr show "$LOCAL_IF" 2>/dev/null | grep -q "inet "; then
+    local name type
+    while IFS=: read -r name type; do
+      [ "$type" = "802-11-wireless" ] || continue
+      nmcli connection up "$name" ifname "$LOCAL_IF" >/dev/null 2>&1 && break
+    done < <(nmcli -t -f NAME,TYPE connection show)
+  fi
+}
+
 # Rejoint un réseau Wi-Fi arbitraire (site client) sur wlan0, via nmcli qui
 # gère à la fois l'ajout du profil et la connexion en une seule commande, et
 # persiste le profil normalement (contrairement à select_5g ci-dessus, pas de
@@ -161,18 +180,7 @@ case "$action" in
   bureau)
     echo "Passage en MODE BUREAU : réactivation du Wi-Fi local wlan0."
     restore_wifi_autoconnect
-    ip link set "$LOCAL_IF" up >/dev/null 2>&1 || true
-    nmcli device set "$LOCAL_IF" managed yes >/dev/null 2>&1 || true
-    sleep 1
-    nmcli device connect "$LOCAL_IF" >/dev/null 2>&1 || true
-
-    if ! ip -4 addr show "$LOCAL_IF" 2>/dev/null | grep -q "inet "; then
-      while IFS=: read -r name type; do
-        [ "$type" = "802-11-wireless" ] || continue
-        nmcli connection up "$name" ifname "$LOCAL_IF" >/dev/null 2>&1 && break
-      done < <(nmcli -t -f NAME,TYPE connection show)
-    fi
-
+    reconnect_local_wifi
     echo "MODE_BUREAU_REQUESTED"
     echo "wlan0 réactivé si un profil Wi-Fi local valide existe."
     echo "AP RB2 conservé sur $AP_IF."
@@ -188,6 +196,16 @@ case "$action" in
     echo "Bascule vers bande 5 GHz (WIFI-MAISON-5G)."
     restore_wifi_autoconnect
     select_5g
+    ;;
+
+  disconnect_client)
+    echo "Déconnexion du Wi-Fi client, retour au réseau local RB2."
+    restore_wifi_autoconnect
+    nmcli device disconnect "$LOCAL_IF" >/dev/null 2>&1 || true
+    sleep 1
+    reconnect_local_wifi
+    echo "DECONNEXION_OK"
+    echo "AP RB2 conservé sur $AP_IF."
     ;;
 
   connect_ssid)
@@ -207,7 +225,7 @@ case "$action" in
     ;;
 
   *)
-    echo "Usage: $0 {terrain|bureau|wifi_24g|wifi_5g|connect_ssid SSID [MOT_DE_PASSE]|status}" >&2
+    echo "Usage: $0 {terrain|bureau|wifi_24g|wifi_5g|connect_ssid SSID [MOT_DE_PASSE]|disconnect_client|status}" >&2
     exit 2
     ;;
 esac

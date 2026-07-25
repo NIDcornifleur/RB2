@@ -16613,7 +16613,7 @@ _RB2_WIFI_SCRIPT = "/usr/local/sbin/rb2-wifi-mode"
 _RB2_LOCAL_WIFI_IF = "wlan0"
 
 def _rb2_wifi_run(action):
-    if action not in ("terrain", "bureau", "wifi_24g", "wifi_5g", "status"):
+    if action not in ("terrain", "bureau", "wifi_24g", "wifi_5g", "disconnect_client", "status"):
         return {
             "ok": False,
             "action": action,
@@ -16799,6 +16799,18 @@ def rb2_network_wifi_5g():
     return _rb2_wifi_jsonify({
         "ok": result.get("ok", False),
         "action": "wifi_5g",
+        "result": result,
+        "state": state,
+    })
+
+@app.route("/rb2_network/disconnect_client", methods=["POST"])
+def rb2_network_disconnect_client():
+    result = _rb2_wifi_run("disconnect_client")
+    _rb2_wifi_time.sleep(1.5)
+    state = _rb2_wlan0_state()
+    return _rb2_wifi_jsonify({
+        "ok": result.get("ok", False),
+        "action": "disconnect_client",
         "result": result,
         "state": state,
     })

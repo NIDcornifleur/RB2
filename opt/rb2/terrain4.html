@@ -343,9 +343,10 @@
             <button id="lidarZoomOutBtn" type="button">ZOOM −</button>
             <button id="lidarZoomInBtn" type="button">ZOOM +</button>
           </div>
-          <div class="button-row two">
+          <div class="button-row">
             <button id="wifi5gBtn" type="button">5G</button>
             <button id="wifiSsidBtn" type="button">SSID</button>
+            <button id="wifiDisconnectBtn" type="button">DÉCONNEXION</button>
           </div>
         </div>
       </div>
@@ -980,6 +981,29 @@
     }
   }
 
+  async function disconnectClientWifi() {
+    const btn = $("wifiDisconnectBtn");
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "DÉCONNEXION…";
+    try {
+      const data = await fetchJson("/rb2_network/disconnect_client", {method: "POST"}, 20000);
+      const state = data.state || {};
+      const ssid = state.ssid || "?";
+      if (state.local_wifi === "ON") {
+        log("Wi‑Fi client : déconnecté, reconnecté au réseau local (" + ssid + ").");
+      } else {
+        log("Wi‑Fi client : déconnecté, mais aucun réseau local n'a repris (Wi‑Fi local " + (state.local_wifi || "?") + ").");
+      }
+      void refreshWifi();
+    } catch (error) {
+      log("Déconnexion Wi‑Fi client : erreur — " + error.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
   async function toggleWifi() {
     const button = $("wifiBtn");
     const current = button.dataset.state || "UNKNOWN";
@@ -1194,6 +1218,7 @@
     $("wifiBtn").addEventListener("click", () => void toggleWifi());
     $("wifi5gBtn").addEventListener("click", () => void switchWifiBand("/rb2_network/wifi_5g", "wifi5gBtn", "5G", "5G…"));
     $("wifiSsidBtn").addEventListener("click", openSsidModal);
+    $("wifiDisconnectBtn").addEventListener("click", () => void disconnectClientWifi());
     $("ssidCancelBtn").addEventListener("click", closeSsidModal);
     $("ssidConnectBtn").addEventListener("click", () => void connectSsid());
     $("ssidModalOverlay").addEventListener("click", (event) => {
