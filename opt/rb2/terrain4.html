@@ -233,6 +233,49 @@
 
     .topbar #shutdownBtn { width: auto; min-height: 38px; font-size: 13px; }
 
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: rgba(5, 7, 9, .72);
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal-box {
+      width: 100%;
+      max-width: 340px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      display: grid;
+      gap: 8px;
+    }
+
+    .modal-box h2 { margin: 0 0 4px; font-size: 16px; }
+
+    .modal-box label { font-size: 12px; color: var(--muted); font-weight: 700; }
+
+    .modal-box input {
+      width: 100%;
+      min-height: 40px;
+      padding: 8px 10px;
+      border: 1px solid #536171;
+      border-radius: 8px;
+      background: #1b222a;
+      color: var(--text);
+      font: inherit;
+    }
+
+    .modal-msg { min-height: 18px; font-size: 12px; font-weight: 700; color: var(--muted); }
+    .modal-msg.error { color: #ff9ba8; }
+    .modal-msg.ok { color: #7be0a0; }
+
     @media (max-width: 980px) {
       .layout { grid-template-columns: 1fr; }
       .side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -300,8 +343,9 @@
             <button id="lidarZoomOutBtn" type="button">ZOOM −</button>
             <button id="lidarZoomInBtn" type="button">ZOOM +</button>
           </div>
-          <div class="button-row one">
+          <div class="button-row two">
             <button id="wifi5gBtn" type="button">5G</button>
+            <button id="wifiSsidBtn" type="button">SSID</button>
           </div>
         </div>
       </div>
@@ -344,6 +388,21 @@
 
     </aside>
   </main>
+
+  <div id="ssidModalOverlay" class="modal-overlay">
+    <div class="modal-box">
+      <h2>Wi‑Fi client</h2>
+      <label for="ssidInput">SSID</label>
+      <input id="ssidInput" type="text" maxlength="32" autocomplete="off" placeholder="Nom du réseau">
+      <label for="ssidPassInput">Mot de passe</label>
+      <input id="ssidPassInput" type="password" maxlength="63" autocomplete="off" placeholder="Vide si réseau ouvert">
+      <div id="ssidModalMsg" class="modal-msg"></div>
+      <div class="button-row two">
+        <button id="ssidConnectBtn" class="green" type="button">CONNECTER</button>
+        <button id="ssidCancelBtn" type="button">ANNULER</button>
+      </div>
+    </div>
+  </div>
 
   <script>
   "use strict";
@@ -833,6 +892,69 @@
     button.disabled = false;
   }
 
+  function openSsidModal() {
+    $("ssidInput").value = "";
+    $("ssidPassInput").value = "";
+    const msg = $("ssidModalMsg");
+    msg.textContent = "";
+    msg.className = "modal-msg";
+    const btn = $("ssidConnectBtn");
+    btn.disabled = false;
+    btn.textContent = "CONNECTER";
+    $("ssidModalOverlay").classList.add("open");
+    $("ssidInput").focus();
+  }
+
+  function closeSsidModal() {
+    $("ssidModalOverlay").classList.remove("open");
+  }
+
+  async function connectSsid() {
+    const ssid = $("ssidInput").value.trim();
+    const password = $("ssidPassInput").value;
+    const msg = $("ssidModalMsg");
+
+    if (!ssid) {
+      msg.textContent = "SSID requis.";
+      msg.className = "modal-msg error";
+      return;
+    }
+
+    const btn = $("ssidConnectBtn");
+    btn.disabled = true;
+    btn.textContent = "CONNEXION…";
+    msg.textContent = "Connexion en cours (jusqu’à 25 s)…";
+    msg.className = "modal-msg";
+
+    try {
+      const data = await fetchJson("/rb2_network/connect_ssid", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ssid, password})
+      }, 32000);
+
+      if (data.ok) {
+        msg.textContent = "Connecté à " + ssid + ".";
+        msg.className = "modal-msg ok";
+        log("Wi‑Fi client : connecté à " + ssid + ".");
+        void refreshWifi();
+        setTimeout(closeSsidModal, 1200);
+      } else {
+        const detail = (data.result && data.result.output) || data.error || "échec";
+        msg.textContent = "Échec : " + detail;
+        msg.className = "modal-msg error";
+        log("Wi‑Fi client : échec de connexion à " + ssid + ".");
+        btn.disabled = false;
+        btn.textContent = "CONNECTER";
+      }
+    } catch (error) {
+      msg.textContent = "Erreur : " + error.message;
+      msg.className = "modal-msg error";
+      btn.disabled = false;
+      btn.textContent = "CONNECTER";
+    }
+  }
+
   async function toggleWifi() {
     const button = $("wifiBtn");
     const current = button.dataset.state || "UNKNOWN";
@@ -1046,6 +1168,15 @@
     $("relay2Btn").addEventListener("click", () => void toggleSwitch("/relay2", "relay2Btn", "RELAIS 2", "relay2On"));
     $("wifiBtn").addEventListener("click", () => void toggleWifi());
     $("wifi5gBtn").addEventListener("click", () => void switchWifiBand("/rb2_network/wifi_5g", "wifi5gBtn", "5G", "5G…"));
+    $("wifiSsidBtn").addEventListener("click", openSsidModal);
+    $("ssidCancelBtn").addEventListener("click", closeSsidModal);
+    $("ssidConnectBtn").addEventListener("click", () => void connectSsid());
+    $("ssidModalOverlay").addEventListener("click", (event) => {
+      if (event.target === $("ssidModalOverlay")) closeSsidModal();
+    });
+    $("ssidPassInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); void connectSsid(); }
+    });
     $("lidarZoomOutBtn").addEventListener("click", () => {
       state.lidarZoom = Math.max(.45, state.lidarZoom / 1.25);
       if (state.lastLidar) drawLidarMap(state.lastLidar);

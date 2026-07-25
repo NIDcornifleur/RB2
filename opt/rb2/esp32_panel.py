@@ -16803,6 +16803,49 @@ def rb2_network_wifi_5g():
         "state": state,
     })
 
+@app.route("/rb2_network/connect_ssid", methods=["POST"])
+def rb2_network_connect_ssid():
+    data = _rb2_wifi_request.get_json(silent=True) or {}
+    ssid = str(data.get("ssid", "")).strip()
+    password = str(data.get("password", ""))
+
+    if not ssid:
+        return _rb2_wifi_jsonify({"ok": False, "error": "SSID requis."}), 400
+    if len(ssid) > 32:
+        return _rb2_wifi_jsonify({"ok": False, "error": "SSID trop long (32 caractères max)."}), 400
+    if password and not (8 <= len(password) <= 63):
+        return _rb2_wifi_jsonify({
+            "ok": False,
+            "error": "Mot de passe : 8 à 63 caractères (ou vide pour un réseau ouvert).",
+        }), 400
+
+    action_args = ["connect_ssid", ssid, password]
+    if _rb2_wifi_os.geteuid() == 0:
+        cmd = [_RB2_WIFI_SCRIPT] + action_args
+    else:
+        cmd = ["sudo", "-n", _RB2_WIFI_SCRIPT] + action_args
+
+    try:
+        p = _rb2_wifi_subprocess.run(
+            cmd,
+            text=True,
+            stdout=_rb2_wifi_subprocess.PIPE,
+            stderr=_rb2_wifi_subprocess.STDOUT,
+            timeout=35,
+        )
+        result = {"ok": p.returncode == 0, "output": p.stdout.strip(), "returncode": p.returncode}
+    except Exception as e:
+        result = {"ok": False, "output": str(e), "returncode": 99}
+
+    state = _rb2_wlan0_state()
+    return _rb2_wifi_jsonify({
+        "ok": result.get("ok", False),
+        "action": "connect_ssid",
+        "ssid": ssid,
+        "result": result,
+        "state": state,
+    })
+
 @app.route("/rb2_network/toggle", methods=["POST"])
 def rb2_network_toggle():
     state_before = _rb2_wlan0_state()
