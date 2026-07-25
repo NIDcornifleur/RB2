@@ -155,6 +155,13 @@ case "$action" in
   connect_ssid)
     echo "Connexion à un réseau Wi-Fi client (SSID fourni)."
     connect_ssid "${2:-}" "${3:-}"
+    # Les autres actions ci-dessus laissent tomber jusqu'au "exit 0" final
+    # sans se soucier du code de sortie de leur fonction (ce qui est
+    # rattrapé côté page par un sondage de confirmation sur /rb2_network/status
+    # pour wifi_24g/wifi_5g). connect_ssid n'a pas cet équivalent de sondage
+    # utile (nouveau SSID arbitraire, pas une bande connue) : il faut donc
+    # que le vrai code de sortie de nmcli remonte jusqu'à Python ici.
+    exit $?
     ;;
 
   status)

@@ -934,11 +934,36 @@
       }, 32000);
 
       if (data.ok) {
-        msg.textContent = "Connecté à " + ssid + ".";
-        msg.className = "modal-msg ok";
-        log("Wi‑Fi client : connecté à " + ssid + ".");
-        void refreshWifi();
-        setTimeout(closeSsidModal, 1200);
+        // nmcli a confirmé l'association, mais si RB2 voit aussi un réseau
+        // connu à priorité élevée (ex. WIFI-MAISON-5G-nanoHD, priorité pinnée),
+        // NetworkManager peut y revenir tout seul quelques secondes plus
+        // tard. On vérifie que la connexion tient avant de déclarer succès.
+        msg.textContent = "Connecté, confirmation…";
+        let confirmed = false;
+        for (let i = 0; i < 5; i++) {
+          await new Promise(resolve => setTimeout(resolve, 1200));
+          try {
+            const status = await fetchJson("/rb2_network/status", {}, 4000);
+            if (status.local_wifi === "ON" && status.ssid === ssid) {
+              confirmed = true;
+              break;
+            }
+          } catch (_) {}
+        }
+
+        if (confirmed) {
+          msg.textContent = "Connecté à " + ssid + ".";
+          msg.className = "modal-msg ok";
+          log("Wi‑Fi client : connecté à " + ssid + ".");
+          void refreshWifi();
+          setTimeout(closeSsidModal, 1200);
+        } else {
+          msg.textContent = "Connexion non confirmée après coup (RB2 a peut-être basculé vers un réseau connu à priorité plus haute).";
+          msg.className = "modal-msg error";
+          log("Wi‑Fi client : connexion à " + ssid + " non confirmée.");
+          btn.disabled = false;
+          btn.textContent = "CONNECTER";
+        }
       } else {
         const detail = (data.result && data.result.output) || data.error || "échec";
         msg.textContent = "Échec : " + detail;
