@@ -336,8 +336,9 @@
           <button id="panRightBtn" type="button">▶</button>
           <span></span><button id="tiltDownBtn" type="button">▼</button><span></span>
         </div>
-        <div class="button-row two">
+        <div class="button-row">
           <button id="centerPtBtn" type="button">CENTRE</button>
+          <button id="tiltHighBtn" type="button">TILT 145°</button>
           <button id="tiltLowBtn" type="button">TILT 68°</button>
         </div>
       </div>
@@ -1044,6 +1045,14 @@
     $("tiltUpBtn").addEventListener("click", () => void moveTilt(5));
     $("tiltDownBtn").addEventListener("click", () => void moveTilt(-5));
     $("centerPtBtn").addEventListener("click", () => void centerPanTilt());
+    $("tiltHighBtn").addEventListener("click", () => {
+      state.tilt = 145;
+      state.pan = clamp(state.pan, 60, 135);
+      $("panValue").textContent = state.pan;
+      $("tiltValue").textContent = "145";
+      void sendAccessoryCommand("p" + state.pan);
+      setTimeout(() => void sendAccessoryCommand("t145"), 180);
+    });
     $("tiltLowBtn").addEventListener("click", () => { state.tilt = 68; $("tiltValue").textContent = "68"; void sendAccessoryCommand("t68"); });
     $("lightBtn").addEventListener("click", () => void toggleSwitch("/light", "lightBtn", "LUMIÈRES", "lightOn"));
     $("relay2Btn").addEventListener("click", () => void toggleSwitch("/relay2", "relay2Btn", "RELAIS 2", "relay2On"));
