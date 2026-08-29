@@ -55,7 +55,20 @@ sudo systemctl --no-pager --full status "$SERVICE"
 
 echo
 echo "===== VÉRIFICATION DE TERRAIN4 ====="
-HEADERS="$(curl -fsS --max-time 5 -D - -o /tmp/rb2-terrain4-check.html http://127.0.0.1:5051/terrain4)"
+READY=0
+for i in $(seq 1 20); do
+  if HEADERS="$(curl -fsS --max-time 2 -D - -o /tmp/rb2-terrain4-check.html http://127.0.0.1:5051/terrain4 2>/dev/null)"; then
+    READY=1
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$READY" -ne 1 ]]; then
+  echo "Le panneau ne répond toujours pas sur le port 5051 après 20s." >&2
+  exit 1
+fi
+
 grep -qi '^X-RB2-Page: terrain4-standalone' <<<"$HEADERS"
 grep -q '<title>RB2 — Terrain4</title>' /tmp/rb2-terrain4-check.html
 echo "Terrain4 autonome répond correctement sur http://127.0.0.1:5051/terrain4"
