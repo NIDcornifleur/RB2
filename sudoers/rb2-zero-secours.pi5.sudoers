@@ -15,3 +15,9 @@ rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block rb2-lidar-map-json
 
 rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart rb2-wifi-dual-loss-return.service
 rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block rb2-wifi-dual-loss-return.service
+
+# Bouton « RÉTABLIR Wi-Fi Pi5 (RB2-ROS) » de la page de secours.
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart rb2-ap-ip.service
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block rb2-ap-ip.service
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart hostapd.service
+rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block hostapd.service

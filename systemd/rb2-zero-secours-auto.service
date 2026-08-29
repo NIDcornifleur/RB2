@@ -1,0 +1,14 @@
+[Unit]
+Description=RB2 activation automatique du PA secours Zero
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+Requires=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/rj/rb2_zero_secours/rb2_zero_secours_auto.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

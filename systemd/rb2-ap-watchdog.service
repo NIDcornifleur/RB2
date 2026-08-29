@@ -1,0 +1,14 @@
+[Unit]
+Description=RB2 chien de garde du PA RB2-ROS (auto-réparation hostapd après reset dongle)
+After=hostapd.service rb2-ap-ip.service network.target
+Wants=hostapd.service
+
+[Service]
+Type=simple
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/python3 /opt/rb2/rb2_ap_watchdog.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
