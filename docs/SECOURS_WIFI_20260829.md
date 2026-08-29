@@ -91,6 +91,24 @@ journalctl -u rb2-ap-watchdog.service -f   # doit dire « démarré » puis rest
 sudo visudo -f /etc/sudoers.d/rb2-zero-secours   # recopier sudoers/rb2-zero-secours.pi5.sudoers
 ```
 
+**Déploiement effectif 2026-08-29** : faute d'accès `sudo` non interactif dans
+la session, le service a été installé sans le `sudo install` ci-dessus —
+script copié dans `~/rb2_scripts/rb2_ap_watchdog.py`, unité
+`~/rb2_scripts/rb2-ap-watchdog.service` (même contenu, `ExecStart` adapté)
+rattachée par `sudo systemctl link` + `enable --now`. Il tourne et a corrigé
+une panne réelle dès le démarrage (dongle ré-énuméré à 16:55, hostapd
+orphelin, RB2-ROS muet jusqu'à la réparation à 18:00). Migration propre vers
+`/opt/rb2` quand `sudo` interactif est dispo :
+
+```bash
+sudo systemctl disable --now rb2-ap-watchdog.service
+sudo rm /etc/systemd/system/rb2-ap-watchdog.service        # supprime le symlink
+sudo install -o root -g root -m 0755 opt/rb2/rb2_ap_watchdog.py /opt/rb2/rb2_ap_watchdog.py
+sudo install -o root -g root -m 0644 systemd/rb2-ap-watchdog.service /etc/systemd/system/rb2-ap-watchdog.service
+rm ~/rb2_scripts/rb2_ap_watchdog.py ~/rb2_scripts/rb2-ap-watchdog.service
+sudo systemctl daemon-reload && sudo systemctl enable --now rb2-ap-watchdog.service
+```
+
 ### Sur le Zero (`rb2cam`, ou par SSH depuis le Pi5 : `ssh rj@10.50.0.20`)
 
 ```bash
