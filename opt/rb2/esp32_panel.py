@@ -14222,10 +14222,10 @@ function ld2OdoOnCenterCm(centerCm) {
   const deltaM = Math.abs(centerCm - ld2OdoLastCenterCm) / 100;
   ld2OdoLastCenterCm = centerCm;
 
-  // Saut aberrant (redémarrage ESP32, RAZ encodeurs) : on ignore plutôt que
-  // d'ajouter une fausse distance.
-  if (deltaM > 5) return;
-
+  // Pas de plafond ici : la lecture des encodeurs est suspendue pendant la
+  // conduite (voir toggleAutoEncoders), donc un seul trajet continu peut
+  // légitimement produire un grand écart entre deux lectures. La RAZ
+  // encodeurs matérielle est gérée séparément via ld2OdoHookResetEncoders.
   ld2OdoTripM += deltaM;
   ld2OdoTotalM += deltaM;
   ld2OdoPaint();
@@ -14239,32 +14239,44 @@ function ld2OdoReset() {
   ld2OdoSave();
 }
 
-(function ld2OdoHookEncoders() {
-  const original = window.updateEncoderDisplay;
-  if (typeof original !== "function") return;
+// lidar_drive2 n'a pas de pad de conduite ni de lecture d'encodeurs à lui
+// (ça vit sur une autre page, ouverte séparément) : on lit /encoders nous-
+// mêmes, en boucle. Chaque lecture bloque le serveur Flask (mono-thread)
+// jusqu'à 1s, donc on reste espacé (5s) et on saute la lecture si une vraie
+// commande moteur vient d'être envoyée depuis N'IMPORTE quel onglet
+// (/wifi_return_status.last_drive_time, déjà interrogé ailleurs, ne parle
+// pas à l'ESP32) pour ne pas ralentir la conduite/caméra en cours.
+const LD2_ODO_POLL_MS = 5000;
+const LD2_ODO_DRIVE_GUARD_S = 1.5;
 
-  window.updateEncoderDisplay = function(values, odom) {
-    original(values, odom);
-    if (odom && odom.center_cm !== null && odom.center_cm !== undefined) {
-      ld2OdoOnCenterCm(odom.center_cm);
+async function ld2OdoTick() {
+  try {
+    const wr = await fetch("/wifi_return_status", { cache: "no-store" });
+    const wj = await wr.json();
+    const lastDriveTime = (wj && typeof wj.last_drive_time === "number") ? wj.last_drive_time : 0;
+    const nowS = Date.now() / 1000;
+
+    if (lastDriveTime && (nowS - lastDriveTime) < LD2_ODO_DRIVE_GUARD_S) {
+      return;
     }
-  };
-})();
+  } catch (e) {
+    return;
+  }
+
+  try {
+    const er = await fetch("/encoders", { cache: "no-store" });
+    const ej = await er.json();
+
+    if (ej && ej.ok && ej.odom && ej.odom.center_cm !== null && ej.odom.center_cm !== undefined) {
+      ld2OdoOnCenterCm(ej.odom.center_cm);
+    }
+  } catch (e) {}
+}
 
 document.addEventListener("DOMContentLoaded", function() {
   ld2OdoPaint();
-
-  // La lecture des encodeurs est normalement manuelle (case "auto encodeurs"
-  // décochée par défaut) ; sur lidar_drive2 on l'active automatiquement pour
-  // que le compteur avance sans action de l'utilisateur. Elle reste suspendue
-  // pendant la conduite active (voir toggleAutoEncoders), donc la distance se
-  // met à jour peu après chaque relâchement du pad, pas en continu pendant
-  // l'appui.
-  const autoBox = document.getElementById("autoEncoders");
-  if (autoBox && !autoBox.checked && typeof toggleAutoEncoders === "function") {
-    autoBox.checked = true;
-    toggleAutoEncoders();
-  }
+  ld2OdoTick();
+  setInterval(ld2OdoTick, LD2_ODO_POLL_MS);
 });
 </script>
 """
