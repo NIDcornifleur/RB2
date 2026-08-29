@@ -14222,10 +14222,10 @@ function ld2OdoOnCenterCm(centerCm) {
   const deltaM = Math.abs(centerCm - ld2OdoLastCenterCm) / 100;
   ld2OdoLastCenterCm = centerCm;
 
-  // Saut aberrant (redémarrage ESP32, RAZ encodeurs) : on ignore plutôt que
-  // d'ajouter une fausse distance.
-  if (deltaM > 5) return;
-
+  // Pas de plafond ici : la lecture des encodeurs est suspendue pendant la
+  // conduite (voir toggleAutoEncoders), donc un seul trajet continu peut
+  // légitimement produire un grand écart entre deux lectures. La RAZ
+  // encodeurs matérielle est gérée séparément via ld2OdoHookResetEncoders.
   ld2OdoTripM += deltaM;
   ld2OdoTotalM += deltaM;
   ld2OdoPaint();
@@ -14248,6 +14248,17 @@ function ld2OdoReset() {
     if (odom && odom.center_cm !== null && odom.center_cm !== undefined) {
       ld2OdoOnCenterCm(odom.center_cm);
     }
+  };
+})();
+
+(function ld2OdoHookResetEncoders() {
+  const original = window.resetEncoders;
+  if (typeof original !== "function") return;
+
+  window.resetEncoders = async function(...args) {
+    const result = await original(...args);
+    ld2OdoLastCenterCm = null;
+    return result;
   };
 })();
 
