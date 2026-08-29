@@ -13953,7 +13953,7 @@ LIDAR_DRIVE2_BARS_CSS = r"""
       .ld2-bars {
         flex: 0 0 auto;
         display: grid;
-        grid-template-rows: auto auto;
+        grid-template-rows: auto auto auto;
         gap: 4px;
         margin-top: 2px;
         z-index: 50;
@@ -13968,6 +13968,10 @@ LIDAR_DRIVE2_BARS_CSS = r"""
 
       .ld2-row.trace {
         grid-template-columns: 64px 1.1fr 1.05fr 1.2fr 1fr 1fr 1fr;
+      }
+
+      .ld2-row.odo {
+        grid-template-columns: 96px 1fr 1fr 130px;
       }
 
       .ld2-label {
@@ -14058,6 +14062,13 @@ LIDAR_DRIVE2_BARS_HTML = r"""
             <button class="ld2-btn ld2-cyan"   onclick="ld2Post('/photo_mark', this, 'REP. OK')">REP. PHOTO</button>
             <button class="ld2-btn ld2-orange" onclick="ld2Post('/trace_mark', this, 'MARQUÉ')">MARQUER</button>
             <button class="ld2-btn ld2-gray"   onclick="ld2Retour(this)">RETOUR</button>
+          </div>
+
+          <div class="ld2-row odo">
+            <div class="ld2-label">DISTANCE</div>
+            <div class="ld2-label" id="ld2OdoTrip">TRAJET : 0,0 m</div>
+            <div class="ld2-label" id="ld2OdoTotal">TOTAL : 0,0 m</div>
+            <button class="ld2-btn ld2-brown" onclick="ld2OdoReset()">RAZ TRAJET</button>
           </div>
         </div>
 """
@@ -14171,6 +14182,89 @@ async function ld2Retour(btn) {
 document.addEventListener("DOMContentLoaded", function() {
   ld2RefreshTrace();
   setInterval(ld2RefreshTrace, 1500);
+});
+
+// === RB2 LIDAR_DRIVE2 : compteur de distance parcourue (trajet + total) ===
+// S'appuie sur l'odométrie encodeurs déjà calculée côté serveur (odom.center_cm,
+// voir /encoders) : à chaque nouvelle lecture, on ajoute la valeur absolue du
+// déplacement depuis la dernière lecture. "Trajet" se remet à zéro (comme un
+// compteur journalier d'auto), "Total" est cumulatif et n'est jamais remis à zéro.
+const LD2_ODO_KEY_TRIP = "rb2_ld2_odo_trip_m";
+const LD2_ODO_KEY_TOTAL = "rb2_ld2_odo_total_m";
+
+let ld2OdoTripM = parseFloat(localStorage.getItem(LD2_ODO_KEY_TRIP)) || 0;
+let ld2OdoTotalM = parseFloat(localStorage.getItem(LD2_ODO_KEY_TOTAL)) || 0;
+let ld2OdoLastCenterCm = null;
+
+function ld2OdoPaint() {
+  const tripEl = document.getElementById("ld2OdoTrip");
+  const totalEl = document.getElementById("ld2OdoTotal");
+
+  if (tripEl) tripEl.textContent = "TRAJET : " + ld2OdoTripM.toFixed(1).replace(".", ",") + " m";
+  if (totalEl) totalEl.textContent = "TOTAL : " + ld2OdoTotalM.toFixed(1).replace(".", ",") + " m";
+}
+
+function ld2OdoSave() {
+  try {
+    localStorage.setItem(LD2_ODO_KEY_TRIP, String(ld2OdoTripM));
+    localStorage.setItem(LD2_ODO_KEY_TOTAL, String(ld2OdoTotalM));
+  } catch (e) {}
+}
+
+function ld2OdoOnCenterCm(centerCm) {
+  if (typeof centerCm !== "number" || !isFinite(centerCm)) return;
+
+  if (ld2OdoLastCenterCm === null) {
+    ld2OdoLastCenterCm = centerCm;
+    return;
+  }
+
+  const deltaM = Math.abs(centerCm - ld2OdoLastCenterCm) / 100;
+  ld2OdoLastCenterCm = centerCm;
+
+  // Saut aberrant (redémarrage ESP32, RAZ encodeurs) : on ignore plutôt que
+  // d'ajouter une fausse distance.
+  if (deltaM > 5) return;
+
+  ld2OdoTripM += deltaM;
+  ld2OdoTotalM += deltaM;
+  ld2OdoPaint();
+  ld2OdoSave();
+}
+
+function ld2OdoReset() {
+  if (!confirm("Remettre le trajet à zéro ?\\n(le total cumulatif n'est pas affecté)")) return;
+  ld2OdoTripM = 0;
+  ld2OdoPaint();
+  ld2OdoSave();
+}
+
+(function ld2OdoHookEncoders() {
+  const original = window.updateEncoderDisplay;
+  if (typeof original !== "function") return;
+
+  window.updateEncoderDisplay = function(values, odom) {
+    original(values, odom);
+    if (odom && odom.center_cm !== null && odom.center_cm !== undefined) {
+      ld2OdoOnCenterCm(odom.center_cm);
+    }
+  };
+})();
+
+document.addEventListener("DOMContentLoaded", function() {
+  ld2OdoPaint();
+
+  // La lecture des encodeurs est normalement manuelle (case "auto encodeurs"
+  // décochée par défaut) ; sur lidar_drive2 on l'active automatiquement pour
+  // que le compteur avance sans action de l'utilisateur. Elle reste suspendue
+  // pendant la conduite active (voir toggleAutoEncoders), donc la distance se
+  // met à jour peu après chaque relâchement du pad, pas en continu pendant
+  // l'appui.
+  const autoBox = document.getElementById("autoEncoders");
+  if (autoBox && !autoBox.checked && typeof toggleAutoEncoders === "function") {
+    autoBox.checked = true;
+    toggleAutoEncoders();
+  }
 });
 </script>
 """
