@@ -29,11 +29,34 @@ ACTIONS = {
         "kind": "http_stop",
     },
 
+    # --- Rétablissement Wi-Fi (les deux boutons à utiliser en priorité) ---
+    "rehab_pi5_ap": {
+        "label": "RÉTABLIR Wi-Fi Pi5 (RB2-ROS)",
+        "danger": False,
+        "kind": "ssh",
+        "cmd": (
+            "sudo -n systemctl restart --no-block rb2-ap-ip.service "
+            "&& sudo -n systemctl restart --no-block hostapd.service "
+            "&& echo 'PA Pi5 RB2-ROS relance'"
+        ),
+    },
+
+    "stop_zero_secours": {
+        "label": "COUPER secours Zero + rebrancher reseau local",
+        "danger": False,
+        "kind": "local",
+        "timeout": 60,
+        "cmd": (
+            "sudo -n /usr/bin/python3 "
+            "/home/rj/rb2_zero_secours/rb2_zero_secours_auto.py --restore"
+        ),
+    },
+
     "status_terrain": {
-        "label": "Tester /terrain Pi5",
+        "label": "Tester /terrain4 Pi5",
         "danger": False,
         "kind": "http_get",
-        "url": f"http://{PI5}:5051/terrain",
+        "url": f"http://{PI5}:5051/terrain4",
     },
 
     "restart_panel": {
@@ -57,11 +80,15 @@ ACTIONS = {
         "cmd": "sudo -n systemctl restart --no-block rb2-lidar-json.service && sudo -n systemctl restart --no-block rb2-lidar-map-json.service && echo 'Restart ponts LIDAR JSON demandé'",
     },
 
+    # ATTENTION : ceci relance UNIQUEMENT le watchdog de recul automatique
+    # (rb2_wifi_dual_loss_return.py, qui fait reculer le robot le long de sa
+    # trace sur perte de signal). Ça ne touche NI hostapd, NI wlan0, NI le PA
+    # secours. Pour rétablir le Wi-Fi, voir « RÉTABLIR Wi-Fi Pi5 » ci-dessus.
     "restart_wifi_return": {
-        "label": "Restart retour Wi-Fi",
+        "label": "Restart watchdog RECUL (ne retablit PAS le Wi-Fi)",
         "danger": False,
         "kind": "ssh",
-        "cmd": "sudo -n systemctl restart --no-block rb2-wifi-dual-loss-return.service && echo 'Restart retour Wi-Fi demandé'",
+        "cmd": "sudo -n systemctl restart --no-block rb2-wifi-dual-loss-return.service && echo 'Restart watchdog recul demandé'",
     },
 
     "restart_zero_cam": {
@@ -136,10 +163,10 @@ def run_action(name):
         return http_get(action["url"])
 
     if kind == "ssh":
-        return run_cmd(SSH_BASE + [action["cmd"]], timeout=25)
+        return run_cmd(SSH_BASE + [action["cmd"]], timeout=action.get("timeout", 25))
 
     if kind == "local":
-        return run_cmd(action["cmd"], timeout=20)
+        return run_cmd(action["cmd"], timeout=action.get("timeout", 20))
 
     return 999, f"Type action non géré: {kind}"
 
@@ -259,6 +286,10 @@ pre {{
   <p><b>Zero secours :</b> {ZERO}</p>
   <p><b>Pi5 RB2 :</b> {PI5}</p>
   <p class="small">Page ouverte de secours. À utiliser seulement en récupération.</p>
+  <p class="small">Pour sortir du secours : « RÉTABLIR Wi-Fi Pi5 » (relance le PA RB2-ROS).
+  Le Zero rebranche alors le réseau local tout seul en ~1 min. « COUPER secours Zero »
+  force ce retour immédiatement — la page se coupe alors, c'est normal : se
+  reconnecter ensuite à RB2-ROS ou au réseau local.</p>
 </div>
 
 <div class="grid">
@@ -266,8 +297,8 @@ pre {{
     Ouvrir caméra Zero
   </a>
 
-  <a class="biglink terrain" href="http://{PI5}:5051/terrain">
-    Ouvrir /terrain Pi5
+  <a class="biglink terrain" href="http://{PI5}:5051/terrain4">
+    Ouvrir /terrain4 Pi5
   </a>
 </div>
 

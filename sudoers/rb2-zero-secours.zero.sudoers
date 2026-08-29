@@ -3,3 +3,7 @@
 
 rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart rb2-zero-cam.service
 rj ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block rb2-zero-cam.service
+
+# Bouton « COUPER secours Zero + rebrancher reseau local » de la page de secours.
+# Le retour au reseau local se fait via nmcli, qui exige root sans session polkit.
+rj ALL=(root) NOPASSWD: /usr/bin/python3 /home/rj/rb2_zero_secours/rb2_zero_secours_auto.py --restore
