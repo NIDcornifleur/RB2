@@ -16620,18 +16620,45 @@ def rb2_terrain2_alias_terrain_fonctionnel():
 def rb2_shutdown_worker():
     """
     Arrêt complet RB2 :
-    1. Arrêter le Zero 2 W caméra par SSH.
-    2. Attendre brièvement.
-    3. Arrêter le Pi 5.
+    1. Positionner le tilt à 145° (rangement) avant de couper l'alimentation.
+    2. Arrêter le Zero 2 W caméra par SSH.
+    3. Attendre brièvement.
+    4. Arrêter le Pi 5.
     """
     import subprocess
     import time
 
+    # Position de rangement : tilt à 145° (max) avant l'arrêt complet.
+    # Règle mécanique existante : quand tilt >= 135°, pan doit rester entre
+    # 60° et 135°. On ne connaît pas le pan courant côté serveur, donc on le
+    # recentre à 95° (déjà dans cette plage) avant d'envoyer le tilt, avec le
+    # même délai que centerPanTilt()/tiltHighBtn côté client.
+    try:
+        esp32.send("p95", wait=0.12)
+        time.sleep(0.18)
+        esp32.send("t145", wait=0.12)
+        # Laisser le temps au servo d'atteindre physiquement 145° avant de
+        # couper l'alimentation.
+        time.sleep(1.5)
+    except Exception as e:
+        try:
+            print("RB2 shutdown: échec mise en position tilt 145:", e)
+        except Exception:
+            pass
+
+    # -o StrictHostKeyChecking=accept-new : indispensable en mode BatchMode.
+    # Si la clé d'hôte du Zero n'est pas encore connue (known_hosts vidé, Zero
+    # ré-imagé, nouvelle carte SD), ssh échouerait sinon avec « Host key
+    # verification failed » et le Zero ne recevrait jamais l'ordre d'arrêt.
+    _ssh_base = [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4",
+        "-o", "StrictHostKeyChecking=accept-new",
+    ]
     zero_commands = [
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "rj@10.50.0.20", "sudo -n /usr/sbin/shutdown -h now"],
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "rj@10.50.0.20", "sudo -n /sbin/shutdown -h now"],
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "rj@10.50.0.20", "sudo -n /usr/bin/systemctl poweroff"],
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "rj@10.50.0.20", "sudo -n /bin/systemctl poweroff"],
+        _ssh_base + ["rj@10.50.0.20", "sudo -n /usr/sbin/shutdown -h now"],
+        _ssh_base + ["rj@10.50.0.20", "sudo -n /sbin/shutdown -h now"],
+        _ssh_base + ["rj@10.50.0.20", "sudo -n /usr/bin/systemctl poweroff"],
+        _ssh_base + ["rj@10.50.0.20", "sudo -n /bin/systemctl poweroff"],
     ]
 
     zero_ok = False
