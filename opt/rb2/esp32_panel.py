@@ -3708,6 +3708,300 @@ def parse_encoders_from_lines(lines):
     return parse_encoders_from_text(text)
 
 
+# === RB2 ODOMÈTRE SERVEUR - BEGIN ===
+# Compteur de distance parcourue calculé et persisté CÔTÉ SERVEUR.
+#
+# Remplace l'ancien compteur de /lidar_drive2 qui vivait dans le localStorage du
+# navigateur (donc: perdu par appareil / origine / vidage de cache, jamais mis à
+# jour si la page n'était pas ouverte pendant la conduite, sauté pendant toute la
+# conduite par un garde-fou de 1,5 s, et cassé par chaque reset DTR de l'ESP32).
+#
+# Ici: un fil de fond interroge "enc" toutes les RB2_ODO_POLL_S secondes, intègre
+# |Δ centre| (déplacement avant/arrière, en valeur absolue -> une avance ET un
+# recul comptent comme de la distance ; une rotation pure ~= 0), détecte les
+# remises à zéro des encodeurs (redémarrage ESP32) et n'ajoute jamais le saut
+# correspondant. Résultat persisté dans RB2_ODO_FILE -> survit aux reboots et
+# est partagé par tous les navigateurs.
+
+import threading as _rb2_odo_threading
+import tempfile as _rb2_odo_tempfile
+
+RB2_ODO_FILE = "/home/rj/rb2_odometre.json"
+RB2_ODO_FILE_FALLBACK = "/tmp/rb2_odometre.json"
+RB2_ODO_POLL_S = 5.0
+RB2_ODO_SEND_WAIT_S = 0.5
+# Distance maximale plausible entre deux échantillons acceptés. Au-delà = glitch
+# ou reset ESP32 : on ré-amorce sans compter. ~1 m/s * (poll + grosse tolérance).
+RB2_ODO_MAX_MM_PER_SAMPLE = 30000.0
+# Somme des |ticks| en dessous de laquelle on considère que l'ESP32 vient d'être
+# remis à zéro (les 4 compteurs repartent de ~0).
+RB2_ODO_RESET_TICK_FLOOR = 400
+RB2_ODO_RESET_MARKERS = ("remis a zero", "remis à zéro", "encodeurs initialis")
+
+_rb2_odo_lock = _rb2_odo_threading.Lock()
+_rb2_odo_started = False
+_rb2_odo_state = {
+    "total_m": 0.0,
+    "trip_m": 0.0,
+    "updated": 0.0,
+    "updated_iso": None,
+    "resets": 0,
+    "samples": 0,
+    "last_error": "",
+}
+# Références internes (hors JSON public) :
+_rb2_odo_primed = False
+_rb2_odo_last_center_mm = None
+_rb2_odo_last_ticks = None
+
+
+def _rb2_odo_now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _rb2_odo_load():
+    global _rb2_odo_last_center_mm, _rb2_odo_last_ticks
+    for path in (RB2_ODO_FILE, RB2_ODO_FILE_FALLBACK):
+        try:
+            if not os.path.isfile(path):
+                continue
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            with _rb2_odo_lock:
+                _rb2_odo_state["total_m"] = float(data.get("total_m") or 0.0)
+                _rb2_odo_state["trip_m"] = float(data.get("trip_m") or 0.0)
+                _rb2_odo_state["resets"] = int(data.get("resets") or 0)
+                _rb2_odo_state["samples"] = int(data.get("samples") or 0)
+                _rb2_odo_state["updated"] = float(data.get("updated") or 0.0)
+                _rb2_odo_state["updated_iso"] = data.get("updated_iso")
+            # On NE recharge PAS last_center_mm : au redémarrage du panneau,
+            # l'ESP32 subit un reset DTR (connect()), ses ticks repartent de 0.
+            # Le premier échantillon ré-amorcera la référence sans compter.
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _rb2_odo_save():
+    with _rb2_odo_lock:
+        payload = {
+            "ok": True,
+            "total_m": round(_rb2_odo_state["total_m"], 3),
+            "trip_m": round(_rb2_odo_state["trip_m"], 3),
+            "resets": _rb2_odo_state["resets"],
+            "samples": _rb2_odo_state["samples"],
+            "updated": _rb2_odo_state["updated"],
+            "updated_iso": _rb2_odo_state["updated_iso"],
+            "last_error": _rb2_odo_state["last_error"],
+            "source": "esp32_panel_odo_serveur",
+        }
+    for path in (RB2_ODO_FILE, RB2_ODO_FILE_FALLBACK):
+        try:
+            directory = os.path.dirname(path) or "/tmp"
+            fd, tmp_path = _rb2_odo_tempfile.mkstemp(prefix=".rb2_odometre_", suffix=".json", dir=directory, text=True)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _rb2_odo_read_encoders():
+    """Renvoie (values_normalisees|None, texte_lignes). FR/RR déjà inversés
+    (avance physique = positif), comme la route /encoders."""
+    # Ne jamais déclencher une (re)connexion série depuis ce fil de fond : si le
+    # port est fermé, on laisse une vraie commande de conduite ou /encoders
+    # rouvrir (avec son reset DTR de 2,5 s). On saute juste ce cycle.
+    try:
+        if not (esp32.ser and getattr(esp32.ser, "is_open", False)):
+            return None, "port série ESP32 fermé"
+    except Exception:
+        return None, "port série ESP32 indisponible"
+
+    try:
+        result = esp32.send("enc", wait=RB2_ODO_SEND_WAIT_S)
+    except Exception as e:
+        return None, f"send enc: {e}"
+
+    lines = []
+    try:
+        lines.extend(result.get("lines", []) or [])
+    except Exception:
+        pass
+    try:
+        lines.extend(esp32.get_last_lines(40))
+    except Exception:
+        pass
+
+    values = parse_encoders_from_lines(lines)
+    if not values or all(values.get(k) is None for k in ("FL", "FR", "RR", "RL")):
+        return None, "aucune valeur encodeur"
+
+    if values.get("FR") is not None:
+        values["FR"] = -values["FR"]
+    if values.get("RR") is not None:
+        values["RR"] = -values["RR"]
+
+    return values, "\n".join(str(x) for x in lines).lower()
+
+
+def _rb2_odo_tick():
+    global _rb2_odo_primed, _rb2_odo_last_center_mm, _rb2_odo_last_ticks
+
+    # Pendant un suivi/retour de trace, le worker conduit ET lit déjà les
+    # encodeurs en boucle serrée : on ne s'ajoute pas au trafic série, et on
+    # ré-amorce pour ne pas compter le rejeu comme un gros bond en une fois
+    # (le rejeu retrace du terrain déjà parcouru).
+    try:
+        if rb2_trace_follow_is_running():
+            _rb2_odo_last_center_mm = None
+            _rb2_odo_last_ticks = None
+            return
+    except Exception:
+        pass
+
+    values, lines_text = _rb2_odo_read_encoders()
+    if values is None:
+        with _rb2_odo_lock:
+            _rb2_odo_state["last_error"] = lines_text
+        return
+
+    odom = compute_odom_from_values(values)
+    center_mm = odom.get("center_mm")
+    if center_mm is None:
+        return
+
+    ticks_abs_sum = sum(abs(int(values.get(k) or 0)) for k in ("FL", "FR", "RR", "RL"))
+    reset_marker = any(m in lines_text for m in RB2_ODO_RESET_MARKERS)
+
+    prev_center = _rb2_odo_last_center_mm
+    prev_abs_sum = None
+    if _rb2_odo_last_ticks:
+        prev_abs_sum = sum(abs(int(_rb2_odo_last_ticks.get(k) or 0)) for k in ("FL", "FR", "RR", "RL"))
+
+    added_m = 0.0
+    counted = True
+    reason = ""
+
+    if not _rb2_odo_primed or prev_center is None:
+        counted = False
+        reason = "amorçage"
+    else:
+        delta_mm = center_mm - prev_center
+        esp32_reset = (
+            reset_marker
+            or abs(delta_mm) > RB2_ODO_MAX_MM_PER_SAMPLE
+            or (
+                prev_abs_sum is not None
+                and prev_abs_sum > RB2_ODO_RESET_TICK_FLOOR * 4
+                and ticks_abs_sum < RB2_ODO_RESET_TICK_FLOOR
+            )
+        )
+        if esp32_reset:
+            counted = False
+            reason = "reset/glitch encodeurs ignoré"
+            with _rb2_odo_lock:
+                _rb2_odo_state["resets"] += 1
+        else:
+            added_m = abs(delta_mm) / 1000.0
+
+    now = time.time()
+    with _rb2_odo_lock:
+        if counted and added_m > 0.0:
+            _rb2_odo_state["total_m"] += added_m
+            _rb2_odo_state["trip_m"] += added_m
+        _rb2_odo_state["samples"] += 1
+        _rb2_odo_state["updated"] = now
+        _rb2_odo_state["updated_iso"] = _rb2_odo_now_iso()
+        _rb2_odo_state["last_error"] = "" if counted else reason
+
+    _rb2_odo_primed = True
+    _rb2_odo_last_center_mm = center_mm
+    _rb2_odo_last_ticks = {k: int(values.get(k) or 0) for k in ("FL", "FR", "RR", "RL")}
+
+    # On n'écrit sur disque que quand ça bouge (ou tous les ~12 échantillons pour
+    # rafraîchir le stamp), pour épargner la carte SD.
+    if added_m > 0.0 or (_rb2_odo_state["samples"] % 12 == 0):
+        _rb2_odo_save()
+
+
+def _rb2_odo_loop():
+    _rb2_odo_load()
+    while True:
+        try:
+            _rb2_odo_tick()
+        except Exception as e:
+            try:
+                with _rb2_odo_lock:
+                    _rb2_odo_state["last_error"] = f"loop: {e}"
+            except Exception:
+                pass
+        time.sleep(RB2_ODO_POLL_S)
+
+
+def _rb2_odo_snapshot():
+    with _rb2_odo_lock:
+        snap = dict(_rb2_odo_state)
+    snap["total_m"] = round(snap["total_m"], 3)
+    snap["trip_m"] = round(snap["trip_m"], 3)
+    snap["age_s"] = round(time.time() - snap["updated"], 1) if snap["updated"] else None
+    snap["ok"] = True
+    snap["primed"] = _rb2_odo_primed
+    return snap
+
+
+def _rb2_start_odo():
+    global _rb2_odo_started
+    if _rb2_odo_started:
+        return
+    _rb2_odo_started = True
+    t = _rb2_odo_threading.Thread(target=_rb2_odo_loop, name="rb2-odometre-serveur", daemon=True)
+    t.start()
+
+
+@app.route("/odometre", methods=["GET"])
+def rb2_odometre():
+    return jsonify(_rb2_odo_snapshot())
+
+
+@app.route("/odometre_trip_reset", methods=["POST"])
+def rb2_odometre_trip_reset():
+    with _rb2_odo_lock:
+        _rb2_odo_state["trip_m"] = 0.0
+        _rb2_odo_state["updated"] = time.time()
+        _rb2_odo_state["updated_iso"] = _rb2_odo_now_iso()
+    _rb2_odo_save()
+    return jsonify(_rb2_odo_snapshot())
+
+
+@app.route("/odometre_total_set", methods=["POST"])
+def rb2_odometre_total_set():
+    raw = None
+    if request.is_json:
+        raw = (request.get_json(silent=True) or {}).get("value_m")
+    if raw is None:
+        raw = request.form.get("value_m", request.args.get("value_m"))
+    try:
+        value_m = float(raw)
+        if value_m < 0 or value_m > 1_000_000:
+            raise ValueError("hors plage")
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"value_m invalide: {e}"}), 400
+    with _rb2_odo_lock:
+        _rb2_odo_state["total_m"] = value_m
+        _rb2_odo_state["updated"] = time.time()
+        _rb2_odo_state["updated_iso"] = _rb2_odo_now_iso()
+    _rb2_odo_save()
+    return jsonify(_rb2_odo_snapshot())
+
+
+_rb2_start_odo()
+
+# === RB2 ODOMÈTRE SERVEUR - END ===
+
 
 
 
@@ -14184,99 +14478,52 @@ document.addEventListener("DOMContentLoaded", function() {
   setInterval(ld2RefreshTrace, 1500);
 });
 
-// === RB2 LIDAR_DRIVE2 : compteur de distance parcourue (trajet + total) ===
-// S'appuie sur l'odométrie encodeurs déjà calculée côté serveur (odom.center_cm,
-// voir /encoders) : à chaque nouvelle lecture, on ajoute la valeur absolue du
-// déplacement depuis la dernière lecture. "Trajet" se remet à zéro (comme un
-// compteur journalier d'auto), "Total" est cumulatif et n'est jamais remis à zéro.
-const LD2_ODO_KEY_TRIP = "rb2_ld2_odo_trip_m";
-const LD2_ODO_KEY_TOTAL = "rb2_ld2_odo_total_m";
+// === RB2 LIDAR_DRIVE2 : compteur de distance parcourue (serveur) ===
+// La distance est calculée et persistée CÔTÉ SERVEUR (/odometre, cf.
+// esp32_panel.py bloc "ODOMÈTRE SERVEUR"). Cette page ne fait que l'afficher :
+// TOTAL est donc identique sur tous les appareils/navigateurs et survit aux
+// reboots. TRAJET est remis à zéro via /odometre_trip_reset (bouton RAZ).
+const LD2_ODO_POLL_MS = 3000;
 
-let ld2OdoTripM = parseFloat(localStorage.getItem(LD2_ODO_KEY_TRIP)) || 0;
-let ld2OdoTotalM = parseFloat(localStorage.getItem(LD2_ODO_KEY_TOTAL)) || 0;
-let ld2OdoLastCenterCm = null;
+function ld2OdoFmt(m) {
+  const n = Number(m);
+  if (!isFinite(n)) return "?";
+  return n.toFixed(1).replace(".", ",");
+}
 
-function ld2OdoPaint() {
+async function ld2OdoRefresh() {
   const tripEl = document.getElementById("ld2OdoTrip");
   const totalEl = document.getElementById("ld2OdoTotal");
 
-  if (tripEl) tripEl.textContent = "TRAJET : " + ld2OdoTripM.toFixed(1).replace(".", ",") + " m";
-  if (totalEl) totalEl.textContent = "TOTAL : " + ld2OdoTotalM.toFixed(1).replace(".", ",") + " m";
-}
-
-function ld2OdoSave() {
   try {
-    localStorage.setItem(LD2_ODO_KEY_TRIP, String(ld2OdoTripM));
-    localStorage.setItem(LD2_ODO_KEY_TOTAL, String(ld2OdoTotalM));
-  } catch (e) {}
-}
+    const r = await fetch("/odometre", { cache: "no-store" });
+    const j = await r.json();
+    if (!j || j.ok === false) throw new Error("odometre non OK");
 
-function ld2OdoOnCenterCm(centerCm) {
-  if (typeof centerCm !== "number" || !isFinite(centerCm)) return;
-
-  if (ld2OdoLastCenterCm === null) {
-    ld2OdoLastCenterCm = centerCm;
-    return;
-  }
-
-  const deltaM = Math.abs(centerCm - ld2OdoLastCenterCm) / 100;
-  ld2OdoLastCenterCm = centerCm;
-
-  // Pas de plafond ici : la lecture des encodeurs est suspendue pendant la
-  // conduite (voir toggleAutoEncoders), donc un seul trajet continu peut
-  // légitimement produire un grand écart entre deux lectures. La RAZ
-  // encodeurs matérielle est gérée séparément via ld2OdoHookResetEncoders.
-  ld2OdoTripM += deltaM;
-  ld2OdoTotalM += deltaM;
-  ld2OdoPaint();
-  ld2OdoSave();
-}
-
-function ld2OdoReset() {
-  if (!confirm("Remettre le trajet à zéro ?\\n(le total cumulatif n'est pas affecté)")) return;
-  ld2OdoTripM = 0;
-  ld2OdoPaint();
-  ld2OdoSave();
-}
-
-// lidar_drive2 n'a pas de pad de conduite ni de lecture d'encodeurs à lui
-// (ça vit sur une autre page, ouverte séparément) : on lit /encoders nous-
-// mêmes, en boucle. Chaque lecture bloque le serveur Flask (mono-thread)
-// jusqu'à 1s, donc on reste espacé (5s) et on saute la lecture si une vraie
-// commande moteur vient d'être envoyée depuis N'IMPORTE quel onglet
-// (/wifi_return_status.last_drive_time, déjà interrogé ailleurs, ne parle
-// pas à l'ESP32) pour ne pas ralentir la conduite/caméra en cours.
-const LD2_ODO_POLL_MS = 5000;
-const LD2_ODO_DRIVE_GUARD_S = 1.5;
-
-async function ld2OdoTick() {
-  try {
-    const wr = await fetch("/wifi_return_status", { cache: "no-store" });
-    const wj = await wr.json();
-    const lastDriveTime = (wj && typeof wj.last_drive_time === "number") ? wj.last_drive_time : 0;
-    const nowS = Date.now() / 1000;
-
-    if (lastDriveTime && (nowS - lastDriveTime) < LD2_ODO_DRIVE_GUARD_S) {
-      return;
-    }
+    const stale = (typeof j.age_s === "number" && j.age_s > 30);
+    if (tripEl) tripEl.textContent = "TRAJET : " + ld2OdoFmt(j.trip_m) + " m";
+    if (totalEl) totalEl.textContent = "TOTAL : " + ld2OdoFmt(j.total_m) + " m" + (stale ? " (?)" : "");
   } catch (e) {
-    return;
+    if (tripEl && !tripEl.textContent) tripEl.textContent = "TRAJET : ? m";
+    if (totalEl && !totalEl.textContent) totalEl.textContent = "TOTAL : ? m";
   }
+}
+
+async function ld2OdoReset() {
+  if (!confirm("Remettre le trajet à zéro ?\\n(le total cumulatif n'est pas affecté)")) return;
 
   try {
-    const er = await fetch("/encoders", { cache: "no-store" });
-    const ej = await er.json();
+    await fetch("/odometre_trip_reset", { method: "POST", cache: "no-store" });
+  } catch (e) {
+    alert("RAZ trajet : erreur " + e);
+  }
 
-    if (ej && ej.ok && ej.odom && ej.odom.center_cm !== null && ej.odom.center_cm !== undefined) {
-      ld2OdoOnCenterCm(ej.odom.center_cm);
-    }
-  } catch (e) {}
+  ld2OdoRefresh();
 }
 
 document.addEventListener("DOMContentLoaded", function() {
-  ld2OdoPaint();
-  ld2OdoTick();
-  setInterval(ld2OdoTick, LD2_ODO_POLL_MS);
+  ld2OdoRefresh();
+  setInterval(ld2OdoRefresh, LD2_ODO_POLL_MS);
 });
 </script>
 """
@@ -16620,18 +16867,45 @@ def rb2_terrain2_alias_terrain_fonctionnel():
 def rb2_shutdown_worker():
     """
     Arrêt complet RB2 :
-    1. Arrêter le Zero 2 W caméra par SSH.
-    2. Attendre brièvement.
-    3. Arrêter le Pi 5.
+    1. Positionner le tilt à 145° (rangement) avant de couper l'alimentation.
+    2. Arrêter le Zero 2 W caméra par SSH.
+    3. Attendre brièvement.
+    4. Arrêter le Pi 5.
     """
     import subprocess
     import time
 
+    # Position de rangement : tilt à 145° (max) avant l'arrêt complet.
+    # Règle mécanique existante : quand tilt >= 135°, pan doit rester entre
+    # 60° et 135°. On ne connaît pas le pan courant côté serveur, donc on le
+    # recentre à 95° (déjà dans cette plage) avant d'envoyer le tilt, avec le
+    # même délai que centerPanTilt()/tiltHighBtn côté client.
+    try:
+        esp32.send("p95", wait=0.12)
+        time.sleep(0.18)
+        esp32.send("t145", wait=0.12)
+        # Laisser le temps au servo d'atteindre physiquement 145° avant de
+        # couper l'alimentation.
+        time.sleep(1.5)
+    except Exception as e:
+        try:
+            print("RB2 shutdown: échec mise en position tilt 145:", e)
+        except Exception:
+            pass
+
+    # -o StrictHostKeyChecking=accept-new : indispensable en mode BatchMode.
+    # Si la clé d'hôte du Zero n'est pas encore connue (known_hosts vidé, Zero
+    # ré-imagé, nouvelle carte SD), ssh échouerait sinon avec « Host key
+    # verification failed » et le Zero ne recevrait jamais l'ordre d'arrêt.
+    _ssh_base = [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4",
+        "-o", "StrictHostKeyChecking=accept-new",
+    ]
     zero_commands = [
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "rj@10.50.0.20", "sudo -n /usr/sbin/shutdown -h now"],
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "rj@10.50.0.20", "sudo -n /sbin/shutdown -h now"],
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "rj@10.50.0.20", "sudo -n /usr/bin/systemctl poweroff"],
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "rj@10.50.0.20", "sudo -n /bin/systemctl poweroff"],
+        _ssh_base + ["rj@10.50.0.20", "sudo -n /usr/sbin/shutdown -h now"],
+        _ssh_base + ["rj@10.50.0.20", "sudo -n /sbin/shutdown -h now"],
+        _ssh_base + ["rj@10.50.0.20", "sudo -n /usr/bin/systemctl poweroff"],
+        _ssh_base + ["rj@10.50.0.20", "sudo -n /bin/systemctl poweroff"],
     ]
 
     zero_ok = False
