@@ -206,6 +206,18 @@ def run_once():
 
             sys_stat = bus.read_byte_data(ADDR, REG_SYS_STAT)
             sys_err = bus.read_byte_data(ADDR, REG_SYS_ERR)
+            opr_mode = bus.read_byte_data(ADDR, REG_OPR_MODE)
+
+            # Le chip peut retomber en CONFIGMODE (ex: coupure/glitch d'alimentation
+            # pendant une manipulation du câblage) sans qu'aucune lecture I2C n'échoue.
+            # Dans ce cas les lectures restent "valides" mais figées à zéro, et le
+            # service continuait avant ce correctif à répondre ok:true indéfiniment.
+            # On force une réinitialisation dès que le mode ou le statut dérive.
+            if opr_mode != MODE_USED or sys_stat == 1:
+                raise RuntimeError(
+                    f"BNO055 hors mode {MODE_NAME}: OPR_MODE=0x{opr_mode:02X} "
+                    f"sys_stat={sys_stat} sys_err={sys_err} -> réinitialisation"
+                )
 
             data = {
                 "ok": True,
@@ -254,6 +266,7 @@ def run_once():
                 "status": {
                     "sys_stat": sys_stat,
                     "sys_err": sys_err,
+                    "opr_mode": f"0x{opr_mode:02X}",
                 },
             }
 
