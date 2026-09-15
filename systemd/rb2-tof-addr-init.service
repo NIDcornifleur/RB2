@@ -1,0 +1,16 @@
+[Unit]
+Description=RB2 VL53L1X/VL53L5CX I2C address reassignment (LPn sur GPIO17)
+After=rb2-bringup.service
+Requires=rb2-bringup.service
+
+[Service]
+Type=simple
+User=rj
+WorkingDirectory=/opt/rb2
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/rb2/rb2_tof_addr_init.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
