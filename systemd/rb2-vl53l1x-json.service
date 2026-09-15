@@ -1,0 +1,16 @@
+[Unit]
+Description=RB2 VL53L1X (ToF simple point) JSON bridge
+After=rb2-bringup.service rb2-tof-addr-init.service
+Requires=rb2-bringup.service rb2-tof-addr-init.service
+
+[Service]
+Type=simple
+User=rj
+WorkingDirectory=/opt/rb2
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/rb2/rb2_vl53l1x_json.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
