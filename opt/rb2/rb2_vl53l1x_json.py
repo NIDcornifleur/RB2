@@ -5,6 +5,15 @@
 # Adresse I2C 0x2A: le VL53L1X démarre à 0x29 (comme le VL53L5CX) et est
 # réassigné à 0x2A au boot par rb2-tof-addr-init.service - ce service doit
 # donc être actif avant celui-ci (voir dépendance systemd).
+#
+# Utilise la lib Adafruit CircuitPython (adafruit-circuitpython-vl53l1x),
+# pas la lib Pimoroni (pip "vl53l1x"): cette dernière fait un poll bloquant
+# côté extension C en attendant la fin de chaque mesure, ce qui gelait le
+# bus i2c-1 au niveau matériel en quelques secondes (TimeoutError Errno 110,
+# récupérable seulement par un débranchement/rebranchement physique du
+# capteur - un simple reboot du Pi ne suffit pas). La lib Adafruit lit les
+# registres directement en Python (via smbus), sans poll bloquant caché:
+# testée en direct plus de 700 lectures consécutives sans geler le bus.
 
 import json
 import os
@@ -14,13 +23,19 @@ import sys
 
 OUT_FILE = "/tmp/rb2_vl53l1x.json"
 
-BUS_NUM = 1
 ADDR = 0x2A
+DISTANCE_MODE_LONG = 2  # jusqu'à ~3.6m, moins précis en pleine lumière
+TIMING_BUDGET_MS = 50   # valeur discrète valide la plus proche de l'ancien budget (66ms)
 
 try:
-    import VL53L1X
+    import board
+    import adafruit_vl53l1x
 except ImportError:
-    print("ERREUR: module VL53L1X absent (pip install --user --break-system-packages vl53l1x)", flush=True)
+    print(
+        "ERREUR: module adafruit_vl53l1x absent "
+        "(pip install --user --break-system-packages adafruit-circuitpython-vl53l1x)",
+        flush=True,
+    )
     sys.exit(1)
 
 
@@ -53,26 +68,30 @@ def write_error(error_text):
 
 
 def run_once():
-    tof = VL53L1X.VL53L1X(i2c_bus=BUS_NUM, i2c_address=ADDR)
-    tof.open()
+    i2c = board.I2C()
+    tof = adafruit_vl53l1x.VL53L1X(i2c, address=ADDR)
 
     try:
-        # Mode LONG (jusqu'à ~4m, moins précis en pleine lumière) par défaut:
-        # convient à la détection d'obstacle mobile plutôt qu'à la précision fine.
-        tof.set_timing_budget(66000)
-        tof.set_inter_measurement_period(70)
-        tof.start_ranging(VL53L1X.VL53L1xDistanceMode.LONG)
+        tof.distance_mode = DISTANCE_MODE_LONG
+        tof.timing_budget = TIMING_BUDGET_MS
+        tof.start_ranging()
 
         print(f"RB2 VL53L1X JSON actif: 0x{ADDR:02X} -> {OUT_FILE}", flush=True)
 
         while True:
-            distance_mm = tof.get_distance()
-            status_code = tof.get_range_status()
-            status_text = tof.get_range_status_string()
+            if not tof.data_ready:
+                time.sleep(0.01)
+                continue
 
-            # Code 0 = mesure valide (RangeStatus "Range valid"). Les autres codes
-            # (ex: 1 signal insuffisant, 2 excès de bruit ambiant) restent renvoyés
-            # tels quels: c'est au consommateur du JSON de décider s'il les ignore.
+            # distance_cm est None si le registre RANGE_STATUS brut n'indique
+            # pas "9" (mesure valide) - pas de code/texte détaillé exposé par
+            # cette lib, contrairement à l'ancienne (Pimoroni).
+            distance_cm = tof.distance
+            tof.clear_interrupt()
+
+            valid = distance_cm is not None
+            distance_mm = round(distance_cm * 10) if valid else None
+
             data = {
                 "ok": True,
                 "stamp": time.time(),
@@ -81,23 +100,16 @@ def run_once():
                 "frame_id": "vl53l1x_link",
 
                 "distance_mm": distance_mm,
-                "valid": status_code == 0,
-
-                "status": {
-                    "code": status_code,
-                    "text": status_text,
-                },
+                "valid": valid,
             }
 
             atomic_write_json(OUT_FILE, data)
-            time.sleep(0.07)
 
     finally:
         try:
             tof.stop_ranging()
         except Exception:
             pass
-        tof.close()
 
 
 def main():
