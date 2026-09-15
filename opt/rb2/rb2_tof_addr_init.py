@@ -88,6 +88,19 @@ def wait_boot_complete(bus, addr, timeout_s=BOOT_POLL_TIMEOUT_S):
 
 
 def reassign_vl53l1x_address(bus):
+    # Idempotence: si le service redémarre sans coupure d'alimentation réelle
+    # (ex. redémarrage du service seul), le VL53L1X garde l'adresse déjà
+    # assignée précédemment - son registre d'adresse ne se réinitialise qu'à
+    # une vraie coupure d'alim, pas à un restart logiciel. Dans ce cas il n'y
+    # a rien à faire, inutile de chercher un VL53L1X (absent) à 0x29.
+    if probe(bus, VL53L1X_NEW_ADDR):
+        model_id = read_reg8(bus, VL53L1X_NEW_ADDR, REG_MODEL_ID)
+        if model_id == VL53L1X_MODEL_ID:
+            log("VL53L1X déjà à 0x{:02X} (MODEL_ID=0x{:02X}), rien à faire".format(
+                VL53L1X_NEW_ADDR, model_id
+            ))
+            return
+
     if not wait_boot_complete(bus, VL53_DEFAULT_ADDR):
         raise RuntimeError("VL53L1X: timeout attente boot complete (FIRMWARE__SYSTEM_STATUS)")
 
