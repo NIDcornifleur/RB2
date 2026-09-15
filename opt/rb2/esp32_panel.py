@@ -4039,6 +4039,72 @@ def imu_json_status():
         })
 
 
+@app.route("/vl53l1x_json")
+def vl53l1x_json_status():
+    tof_file = "/tmp/rb2_vl53l1x.json"
+
+    if not os.path.exists(tof_file):
+        return jsonify({
+            "ok": False,
+            "error": "Fichier VL53L1X absent",
+            "file": tof_file
+        })
+
+    try:
+        st = os.stat(tof_file)
+        age_s = time.time() - st.st_mtime
+
+        with open(tof_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        return jsonify({
+            "ok": True,
+            "age_s": age_s,
+            "file": tof_file,
+            "data": data
+        })
+
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "file": tof_file
+        })
+
+
+@app.route("/vl53l5cx_json")
+def vl53l5cx_json_status():
+    tof_file = "/tmp/rb2_vl53l5cx.json"
+
+    if not os.path.exists(tof_file):
+        return jsonify({
+            "ok": False,
+            "error": "Fichier VL53L5CX absent",
+            "file": tof_file
+        })
+
+    try:
+        st = os.stat(tof_file)
+        age_s = time.time() - st.st_mtime
+
+        with open(tof_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        return jsonify({
+            "ok": True,
+            "age_s": age_s,
+            "file": tof_file,
+            "data": data
+        })
+
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "file": tof_file
+        })
+
+
 @app.route("/lidar")
 def lidar_status():
     lidar_file = "/tmp/rb2_lidar.json"
@@ -14268,6 +14334,20 @@ LIDAR_DRIVE2_BARS_CSS = r"""
         grid-template-columns: 96px 1fr 1fr 130px;
       }
 
+      .ld2-row.eau {
+        grid-template-columns: 96px 1fr 1fr;
+      }
+
+      .ld2-label.ld2-alert {
+        background: #9a1111;
+        border-color: #ff5555;
+        animation: ld2-alert-blink 1s infinite;
+      }
+
+      @keyframes ld2-alert-blink {
+        50% { opacity: 0.5; }
+      }
+
       .ld2-label {
         display: flex;
         align-items: center;
@@ -14363,6 +14443,12 @@ LIDAR_DRIVE2_BARS_HTML = r"""
             <div class="ld2-label" id="ld2OdoTrip">TRAJET : 0,0 m</div>
             <div class="ld2-label" id="ld2OdoTotal">TOTAL : 0,0 m</div>
             <button class="ld2-btn ld2-brown" onclick="ld2OdoReset()">RAZ TRAJET</button>
+          </div>
+
+          <div class="ld2-row eau">
+            <div class="ld2-label">EAU</div>
+            <div class="ld2-label" id="ld2WaterFloor">SOL : ?</div>
+            <div class="ld2-label" id="ld2WaterCeil">PLAFOND : ?</div>
           </div>
         </div>
 """
@@ -14524,6 +14610,103 @@ async function ld2OdoReset() {
 document.addEventListener("DOMContentLoaded", function() {
   ld2OdoRefresh();
   setInterval(ld2OdoRefresh, LD2_ODO_POLL_MS);
+});
+
+// === RB2 LIDAR_DRIVE2 : alarme visuelle détection d'eau (VL53L1X sol + VL53L5CX plafond) ===
+// Ces deux capteurs ToF ne servent PAS à l'évitement d'obstacle: ils surveillent
+// une présence d'eau. Références à sec: ~60mm sous le RB2 (sol), ~600mm au
+// plafond. L'eau perturbe souvent le retour du laser ToF (lecture invalide) et/ou
+// change la distance mesurée par rapport à la référence à sec: l'alarme se
+// déclenche donc soit sur un écart significatif de distance, soit sur une
+// lecture invalide prolongée (pour ne pas clignoter sur un simple glitch ponctuel).
+const LD2_WATER_POLL_MS = 1000;
+const LD2_WATER_FLOOR_LOW_MM = 40;
+const LD2_WATER_FLOOR_HIGH_MM = 80;
+const LD2_WATER_CEIL_LOW_MM = 400;
+const LD2_WATER_CEIL_HIGH_MM = 800;
+const LD2_WATER_INVALID_ALERT_MS = 3000;
+const LD2_WATER_MAX_AGE_S = 5;
+
+let ld2WaterFloorInvalidSince = null;
+let ld2WaterCeilInvalidSince = null;
+
+function ld2WaterSetLabel(el, text, alert) {
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle("ld2-alert", !!alert);
+}
+
+async function ld2WaterRefreshFloor() {
+  const el = document.getElementById("ld2WaterFloor");
+  if (!el) return;
+
+  try {
+    const r = await fetch("/vl53l1x_json", { cache: "no-store" });
+    const j = await r.json();
+    const d = j && j.data;
+    const stale = !j || j.ok === false || (typeof j.age_s === "number" && j.age_s > LD2_WATER_MAX_AGE_S);
+    const valid = !stale && d && d.ok === true && d.valid === true && typeof d.distance_mm === "number";
+
+    if (valid) {
+      ld2WaterFloorInvalidSince = null;
+    } else if (ld2WaterFloorInvalidSince === null) {
+      ld2WaterFloorInvalidSince = Date.now();
+    }
+
+    const invalidTooLong = ld2WaterFloorInvalidSince !== null &&
+      (Date.now() - ld2WaterFloorInvalidSince) > LD2_WATER_INVALID_ALERT_MS;
+
+    if (valid) {
+      const mm = d.distance_mm;
+      const alert = invalidTooLong || mm < LD2_WATER_FLOOR_LOW_MM || mm > LD2_WATER_FLOOR_HIGH_MM;
+      ld2WaterSetLabel(el, "SOL : " + mm + " mm", alert);
+    } else {
+      ld2WaterSetLabel(el, "SOL : ?", invalidTooLong);
+    }
+  } catch (e) {
+    if (ld2WaterFloorInvalidSince === null) ld2WaterFloorInvalidSince = Date.now();
+    ld2WaterSetLabel(el, "SOL : ?", (Date.now() - ld2WaterFloorInvalidSince) > LD2_WATER_INVALID_ALERT_MS);
+  }
+}
+
+async function ld2WaterRefreshCeil() {
+  const el = document.getElementById("ld2WaterCeil");
+  if (!el) return;
+
+  try {
+    const r = await fetch("/vl53l5cx_json", { cache: "no-store" });
+    const j = await r.json();
+    const d = j && j.data;
+    const stale = !j || j.ok === false || (typeof j.age_s === "number" && j.age_s > LD2_WATER_MAX_AGE_S);
+    const mm = d && d.min_valid_distance_mm;
+    const valid = !stale && d && d.ok === true && typeof mm === "number";
+
+    if (valid) {
+      ld2WaterCeilInvalidSince = null;
+    } else if (ld2WaterCeilInvalidSince === null) {
+      ld2WaterCeilInvalidSince = Date.now();
+    }
+
+    const invalidTooLong = ld2WaterCeilInvalidSince !== null &&
+      (Date.now() - ld2WaterCeilInvalidSince) > LD2_WATER_INVALID_ALERT_MS;
+
+    if (valid) {
+      const alert = invalidTooLong || mm < LD2_WATER_CEIL_LOW_MM || mm > LD2_WATER_CEIL_HIGH_MM;
+      ld2WaterSetLabel(el, "PLAFOND : " + mm + " mm", alert);
+    } else {
+      ld2WaterSetLabel(el, "PLAFOND : ?", invalidTooLong);
+    }
+  } catch (e) {
+    if (ld2WaterCeilInvalidSince === null) ld2WaterCeilInvalidSince = Date.now();
+    ld2WaterSetLabel(el, "PLAFOND : ?", (Date.now() - ld2WaterCeilInvalidSince) > LD2_WATER_INVALID_ALERT_MS);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+  ld2WaterRefreshFloor();
+  ld2WaterRefreshCeil();
+  setInterval(ld2WaterRefreshFloor, LD2_WATER_POLL_MS);
+  setInterval(ld2WaterRefreshCeil, LD2_WATER_POLL_MS);
 });
 </script>
 """
