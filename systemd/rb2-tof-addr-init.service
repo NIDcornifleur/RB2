@@ -6,7 +6,7 @@ Requires=rb2-bringup.service
 [Service]
 Type=simple
 User=rj
-WorkingDirectory=/opt/rb2
+WorkingDirectory=/tmp
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 /opt/rb2/rb2_tof_addr_init.py
 Restart=always
