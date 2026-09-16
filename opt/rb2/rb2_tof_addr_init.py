@@ -20,7 +20,15 @@ import signal
 import sys
 import time
 
-BUS_NUM = 1
+# BUS_NUM=3: bus i2c-gpio bit-bangé (overlay dtoverlay=i2c-gpio,bus=3 sur
+# GPIO23/24), pas le bus matériel i2c-1 (GPIO2/3). Le contrôleur DesignWare
+# de i2c-1 se bloquait ("controller timed out" au dmesg) sans déclencheur
+# identifié, plusieurs fois par session, récupérable seulement par un
+# débranchement physique des capteurs ToF. Le driver noyau i2c-gpio gère le
+# stretching d'horloge en bit-bang logiciel et permet une récupération de bus
+# sans cycle d'alimentation. Le BNO055 reste sur i2c-1 (jamais impliqué dans
+# les blocages observés).
+BUS_NUM = 3
 GPIO_CHIP = 4     # sur Pi 5, les GPIO du connecteur 40 broches sont sur gpiochip4 (pinctrl-rp1)
 LPN_PIN = 17
 
