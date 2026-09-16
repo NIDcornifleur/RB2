@@ -1,7 +1,7 @@
 [Unit]
 Description=RB2 VL53L1X (ToF simple point) JSON bridge
 After=rb2-bringup.service rb2-tof-addr-init.service
-Requires=rb2-bringup.service rb2-tof-addr-init.service
+Wants=rb2-bringup.service rb2-tof-addr-init.service
 
 [Service]
 Type=simple
