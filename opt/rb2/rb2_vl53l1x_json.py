@@ -14,6 +14,15 @@
 # capteur - un simple reboot du Pi ne suffit pas). La lib Adafruit lit les
 # registres directement en Python (via smbus), sans poll bloquant caché:
 # testée en direct plus de 700 lectures consécutives sans geler le bus.
+#
+# Bus i2c-3 (pas i2c-1): le contrôleur matériel DesignWare de i2c-1 continuait
+# à se bloquer même après le fix ci-dessus, sans déclencheur identifiable
+# (dmesg: "controller timed out"). i2c-3 est un bus i2c-gpio bit-bangé
+# (overlay dtoverlay=i2c-gpio,bus=3, GPIO23/24) qui gère le stretching
+# d'horloge en logiciel côté noyau. Nécessite le paquet
+# adafruit-extended-bus (pip install --user --break-system-packages
+# adafruit-extended-bus) pour ouvrir un /dev/i2c-N autre que celui par
+# défaut avec les libs CircuitPython.
 
 import json
 import os
@@ -27,13 +36,16 @@ ADDR = 0x2A
 DISTANCE_MODE_LONG = 2  # jusqu'à ~3.6m, moins précis en pleine lumière
 TIMING_BUDGET_MS = 50   # valeur discrète valide la plus proche de l'ancien budget (66ms)
 
+I2C_BUS_NUM = 3
+
 try:
-    import board
+    from adafruit_extended_bus import ExtendedI2C
     import adafruit_vl53l1x
 except ImportError:
     print(
-        "ERREUR: module adafruit_vl53l1x absent "
-        "(pip install --user --break-system-packages adafruit-circuitpython-vl53l1x)",
+        "ERREUR: module adafruit_vl53l1x/adafruit_extended_bus absent "
+        "(pip install --user --break-system-packages "
+        "adafruit-circuitpython-vl53l1x adafruit-extended-bus)",
         flush=True,
     )
     sys.exit(1)
@@ -68,7 +80,7 @@ def write_error(error_text):
 
 
 def run_once():
-    i2c = board.I2C()
+    i2c = ExtendedI2C(I2C_BUS_NUM)
     tof = adafruit_vl53l1x.VL53L1X(i2c, address=ADDR)
 
     try:

@@ -4,7 +4,9 @@ After=rb2-bringup.service
 Wants=rb2-bringup.service
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=15
 User=rj
 WorkingDirectory=/tmp
 Environment=PYTHONUNBUFFERED=1
