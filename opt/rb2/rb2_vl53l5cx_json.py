@@ -10,6 +10,13 @@
 # Codes de statut ST (target_status) considérés valides ici: 5, 6, 9
 # (mesure fiable / avertissement mineur / cible fusionnée) - les autres
 # (ex: 255 = pas de cible) sont marqués invalides plutôt qu'ignorés.
+#
+# Bus i2c-3 (pas i2c-1): le contrôleur matériel DesignWare de i2c-1 se
+# bloquait régulièrement sans déclencheur identifiable (dmesg: "controller
+# timed out"), récupérable seulement par un débranchement physique des
+# capteurs. i2c-3 est un bus i2c-gpio bit-bangé (overlay
+# dtoverlay=i2c-gpio,bus=3, GPIO23/24) qui gère le stretching d'horloge en
+# logiciel côté noyau.
 
 import json
 import os
@@ -23,13 +30,15 @@ ADDR = 0x29
 RESOLUTION = "4x4"
 GRID_SIZE = 16
 RANGING_FREQUENCY_HZ = 15
+I2C_BUS_NUM = 3
 
 VALID_STATUS_CODES = (5, 6, 9)
 
 try:
     import vl53l5cx_ctypes as vl53l5cx
+    from smbus2 import SMBus
 except ImportError:
-    print("ERREUR: module vl53l5cx_ctypes absent (pip install --user --break-system-packages vl53l5cx-ctypes)", flush=True)
+    print("ERREUR: module vl53l5cx_ctypes/smbus2 absent (pip install --user --break-system-packages vl53l5cx-ctypes smbus2)", flush=True)
     sys.exit(1)
 
 
@@ -62,7 +71,7 @@ def write_error(error_text):
 
 
 def run_once():
-    tof = vl53l5cx.VL53L5CX()
+    tof = vl53l5cx.VL53L5CX(i2c_dev=SMBus(I2C_BUS_NUM))
 
     try:
         tof.set_resolution(vl53l5cx.RESOLUTION_4X4)
