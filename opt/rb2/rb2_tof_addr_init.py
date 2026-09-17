@@ -16,7 +16,9 @@
 # repasser bas) tant qu'aucun autre process ne la maintient. Prévu pour
 # tourner comme service systemd permanent (Restart=always), pas en one-shot.
 
+import os
 import signal
+import socket
 import sys
 import time
 
@@ -59,6 +61,28 @@ except ImportError:
 
 def log(msg):
     print(msg, flush=True)
+
+
+def sd_notify_ready():
+    # Signale à systemd (Type=notify) que la réassignation d'adresse est
+    # terminée - sans ça, After=/Requires= sur ce service ne garantit que le
+    # lancement du process, pas la fin de cette séquence, et les services
+    # rb2-vl53l1x-json / rb2-vl53l5cx-json peuvent démarrer et sonder le bus
+    # avant que les adresses ne soient stabilisées (race condition observée
+    # au boot le 2026-09-15).
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return
+    if addr.startswith("@"):
+        addr = "\0" + addr[1:]
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    try:
+        sock.connect(addr)
+        sock.sendall(b"READY=1")
+    except OSError:
+        pass
+    finally:
+        sock.close()
 
 
 def read_reg8(bus, addr, reg16):
@@ -183,6 +207,12 @@ def main():
         lgpio.gpio_write(gpio_h, LPN_PIN, 1)
     finally:
         bus.close()
+
+    # Adresses stabilisées (avec ou sans erreur de réassignation - dans les
+    # deux cas GPIO17 est déjà dans son état final), on peut prévenir
+    # systemd que les services dépendants peuvent démarrer sans risquer de
+    # sonder le bus trop tôt.
+    sd_notify_ready()
 
     # Reste résident pour maintenir GPIO17 (LPn) à 1 tant qu'aucun pull-up
     # matériel n'est confirmé sur ce pin - voir le commentaire en tête de fichier.
