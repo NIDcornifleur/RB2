@@ -1,0 +1,14 @@
+[Unit]
+Description=RB2 ToF (sol/plafond) stale data watchdog
+After=rb2-bringup.service rb2-tof-addr-init.service rb2-vl53l1x-json.service rb2-vl53l5cx-json.service
+Wants=rb2-bringup.service rb2-tof-addr-init.service rb2-vl53l1x-json.service rb2-vl53l5cx-json.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /opt/rb2/rb2_tof_watchdog.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
