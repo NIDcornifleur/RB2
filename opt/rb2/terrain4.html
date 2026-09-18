@@ -154,7 +154,8 @@
 
     /* INFO-PANEL:BEGIN — bandeau d'état sous la caméra (retrait : supprimer les blocs INFO-PANEL) */
     .info-panel { display: grid; gap: 7px; margin-top: 8px; }
-    .info-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+    .info-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+    .tilt-canvas { display: block; width: 100%; height: 118px; border: 1px solid #485562; border-radius: 8px; background: #222a32; }
     .info-row.eau { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 96px; }
     .info-row .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pill.blink { animation: info-blink 1s infinite; }
@@ -348,13 +349,13 @@
             <div class="info-row">
               <span id="infoSensors" class="pill">Capteurs —</span>
               <span id="infoWifi" class="pill">Wi‑Fi —</span>
-              <span id="infoTilt" class="pill">Inclinaison —</span>
             </div>
             <div class="info-row eau">
               <span id="infoFloor" class="pill">SOL —</span>
               <span id="infoCeil" class="pill">PLAFOND —</span>
               <div id="infoCeilGrid" class="tof-grid" title="VL53L5CX 4x4 (mm/10), plafond"></div>
             </div>
+            <canvas id="infoTiltCanvas" class="tilt-canvas" title="Horizon artificiel (IMU BNO055)"></canvas>
           </div>
           <!-- INFO-PANEL:END -->
         </div>
@@ -1136,16 +1137,83 @@
     }
   }
 
+  // Horizon artificiel + niveaux roulis/tangage. Si le sens est inversé sur le robot
+  // (mesuré au banc), passer le signe correspondant à -1.
+  const TILT = {rollSign: 1, pitchSign: 1, last: null};
+
+  function drawTilt() {
+    const canvas = $("infoTiltCanvas");
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const d = TILT.last;
+    const roll = d ? d.roll * TILT.rollSign : 0;
+    const pitch = d ? d.pitch * TILT.pitchSign : 0;
+
+    // Boule d'horizon à gauche
+    const r = h / 2 - 6, cx = r + 8, cy = h / 2;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
+    ctx.translate(cx, cy);
+    ctx.rotate(-roll * Math.PI / 180);
+    const off = clamp(pitch, -35, 35) * (r / 40);   // tangage positif = horizon descend
+    ctx.fillStyle = "#2f6fb0"; ctx.fillRect(-2 * r, -2 * r + off, 4 * r, 2 * r);
+    ctx.fillStyle = "#8a5a2b"; ctx.fillRect(-2 * r, off, 4 * r, 2 * r);
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-2 * r, off); ctx.lineTo(2 * r, off); ctx.stroke();
+    ctx.restore();
+    ctx.strokeStyle = "#8b98a5"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    // Repère fixe du robot
+    ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx - r * .55, cy); ctx.lineTo(cx - r * .15, cy);
+    ctx.moveTo(cx + r * .15, cy); ctx.lineTo(cx + r * .55, cy);
+    ctx.stroke();
+    ctx.fillStyle = "#ffd23f"; ctx.fillRect(cx - 2, cy - 2, 4, 4);
+
+    // Barres de niveau à droite (bulle) : roulis puis tangage, ±30°
+    const x0 = cx + r + 22, x1 = w - 12, mid = (x0 + x1) / 2, span = (x1 - x0) / 2;
+    const bar = (label, value, y) => {
+      ctx.fillStyle = "#aab5bf"; ctx.font = "bold 11px Arial"; ctx.textAlign = "left";
+      ctx.fillText(label, x0, y - 12);
+      ctx.textAlign = "right";
+      ctx.fillStyle = d ? "#f2f5f7" : "#7a8590";
+      ctx.fillText(d ? (value >= 0 ? "+" : "−") + Math.abs(value).toFixed(1) + "°" : "—", x1, y - 12);
+      ctx.fillStyle = "#151b21"; ctx.fillRect(x0, y - 5, x1 - x0, 10);
+      ctx.strokeStyle = "#485562"; ctx.lineWidth = 1; ctx.strokeRect(x0 + .5, y - 4.5, x1 - x0 - 1, 9);
+      ctx.strokeStyle = "#8b98a5"; ctx.beginPath(); ctx.moveTo(mid, y - 8); ctx.lineTo(mid, y + 8); ctx.stroke();
+      if (d) {
+        const v = clamp(value, -30, 30);
+        const big = Math.abs(value) >= 15;
+        ctx.fillStyle = big ? "#ff6b6b" : "#7be0a0";
+        ctx.beginPath(); ctx.arc(mid + v / 30 * span, y, 7, 0, Math.PI * 2); ctx.fill();
+      }
+    };
+    bar("ROULIS", roll, h * .30);
+    bar("TANGAGE", pitch, h * .62);
+    ctx.fillStyle = "#aab5bf"; ctx.font = "bold 11px Arial"; ctx.textAlign = "left";
+    ctx.fillText(d ? "CAP " + Math.round(d.heading) + "°" : "IMU ?", x0, h - 8);
+  }
+
   async function infoRefreshTilt() {
     try {
       const j = await infoGet("/imu_json");
       const d = j && j.data;
-      if (!j || j.ok === false || !d || j.age_s > INFO.maxAgeS) throw new Error("imu");
-      const f = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1);
-      setPill("infoTilt", "R " + f(d.roll_deg) + "° · P " + f(d.pitch_deg) + "° · Cap " + Math.round(d.heading_deg) + "°", "ok");
+      if (!j || j.ok === false || !d || j.age_s > INFO.maxAgeS
+          || !Number.isFinite(d.roll_deg) || !Number.isFinite(d.pitch_deg)) throw new Error("imu");
+      TILT.last = {roll: d.roll_deg, pitch: d.pitch_deg, heading: d.heading_deg};
     } catch (_) {
-      setPill("infoTilt", "IMU ?", "warn");
+      TILT.last = null;
     }
+    drawTilt();
   }
 
   async function infoRefreshSensors() {
@@ -1424,6 +1492,7 @@
   });
   window.addEventListener("resize", () => {
     if (state.lastLidar) drawLidarMap(state.lastLidar);
+    drawTilt(); // INFO-PANEL
   });
   document.addEventListener("DOMContentLoaded", () => void initialize());
   </script>
