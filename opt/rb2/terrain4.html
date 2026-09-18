@@ -156,16 +156,9 @@
     .info-panel { display: grid; gap: 7px; margin-top: 8px; }
     .info-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
     .tilt-canvas { display: block; width: 100%; height: 118px; border: 1px solid #485562; border-radius: 8px; background: #222a32; }
-    .info-row.eau { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 96px; }
     .info-row .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pill.blink { animation: info-blink 1s infinite; }
     @keyframes info-blink { 50% { opacity: .45; } }
-    .tof-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
-    .tof-grid span {
-      padding: 2px 0; border-radius: 3px; background: #222a32; color: #d8e0e6;
-      font-size: 9px; font-weight: 700; text-align: center;
-    }
-    .tof-grid span.bad { background: #101418; color: #56616b; }
     /* INFO-PANEL:END */
 
     .drive-grid, .pt-grid {
@@ -353,7 +346,6 @@
             <div class="info-row eau">
               <span id="infoFloor" class="pill">SOL —</span>
               <span id="infoCeil" class="pill">PLAFOND —</span>
-              <div id="infoCeilGrid" class="tof-grid" title="VL53L5CX 4x4 (mm/10), plafond"></div>
             </div>
             <canvas id="infoTiltCanvas" class="tilt-canvas" title="Horizon artificiel (IMU BNO055)"></canvas>
           </div>
@@ -1113,28 +1105,16 @@
   }
 
   async function infoRefreshCeiling() {
-    let mm = null, cells = null, valid = null;
+    let mm = null;
     try {
       const j = await infoGet("/vl53l5cx_json");
       const d = j && j.data;
       if (j && j.ok !== false && !(j.age_s > INFO.maxAgeS) && d && d.ok === true
           && typeof d.min_valid_distance_mm === "number") {
         mm = d.min_valid_distance_mm;
-        cells = d.distance_mm;
-        valid = d.valid;
       }
     } catch (_) {}
     infoWater("PLAFOND", "infoCeil", mm, "ceilInvalidSince", INFO.ceilLow, INFO.ceilHigh);
-    const grid = $("infoCeilGrid");
-    if (grid.children.length !== 16) {
-      grid.innerHTML = "<span>–</span>".repeat(16);
-    }
-    for (let i = 0; i < 16; i++) {
-      const cell = grid.children[i];
-      const ok = cells && valid && valid[i] === true && Number.isFinite(cells[i]);
-      cell.textContent = ok ? Math.round(cells[i] / 10) : "–";
-      cell.className = ok ? "" : "bad";
-    }
   }
 
   // Horizon artificiel + niveaux roulis/tangage. Si le sens est inversé sur le robot
