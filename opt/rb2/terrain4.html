@@ -91,6 +91,7 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
       min-width: 0;
+      align-items: start;
     }
 
     .card {
@@ -103,7 +104,6 @@
 
     .camera-frame {
       position: relative;
-      min-height: 320px;
       background: #000;
       border: 1px solid #303943;
       border-radius: 8px;
@@ -113,9 +113,8 @@
     #camera {
       display: block;
       width: 100%;
-      height: min(66vh, 720px);
-      min-height: 320px;
-      object-fit: contain;
+      height: auto;
+      aspect-ratio: 16 / 9;
       background: #000;
     }
 
@@ -280,7 +279,6 @@
       .layout { grid-template-columns: 1fr; }
       .side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .side .full { grid-column: 1 / -1; }
-      #camera { height: min(58vh, 620px); }
       #lidarCanvas { height: min(58vh, 620px); }
     }
 
@@ -294,9 +292,7 @@
       .layout { padding: 6px; gap: 6px; }
       .side { grid-template-columns: 1fr; }
       .button-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      #camera { height: 45vh; min-height: 240px; }
       #lidarCanvas { height: 45vh; min-height: 240px; }
-      .camera-frame { min-height: 240px; }
       .lidar-frame { min-height: 240px; }
     }
   </style>
