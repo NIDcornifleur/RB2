@@ -152,6 +152,21 @@
     .pill.warn { border-color: #bd741b; color: #ffd08a; }
     .pill.bad { border-color: #c93b4e; color: #ff9ba8; }
 
+    /* INFO-PANEL:BEGIN — bandeau d'état sous la caméra (retrait : supprimer les blocs INFO-PANEL) */
+    .info-panel { display: grid; gap: 7px; margin-top: 8px; }
+    .info-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+    .info-row.eau { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 96px; }
+    .info-row .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pill.blink { animation: info-blink 1s infinite; }
+    @keyframes info-blink { 50% { opacity: .45; } }
+    .tof-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+    .tof-grid span {
+      padding: 2px 0; border-radius: 3px; background: #222a32; color: #d8e0e6;
+      font-size: 9px; font-weight: 700; text-align: center;
+    }
+    .tof-grid span.bad { background: #101418; color: #56616b; }
+    /* INFO-PANEL:END */
+
     .drive-grid, .pt-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -328,6 +343,20 @@
             <a class="button green" href="/zero_cam_stream.mjpg" target="_blank">CAMÉRA DIRECTE</a>
             <button id="restartCameraBtn" class="red" type="button">RESTART CAMÉRA</button>
           </div>
+          <!-- INFO-PANEL:BEGIN -->
+          <div class="info-panel">
+            <div class="info-row">
+              <span id="infoSensors" class="pill">Capteurs —</span>
+              <span id="infoWifi" class="pill">Wi‑Fi —</span>
+              <span id="infoTilt" class="pill">Inclinaison —</span>
+            </div>
+            <div class="info-row eau">
+              <span id="infoFloor" class="pill">SOL —</span>
+              <span id="infoCeil" class="pill">PLAFOND —</span>
+              <div id="infoCeilGrid" class="tof-grid" title="VL53L5CX 4x4 (mm/10), plafond"></div>
+            </div>
+          </div>
+          <!-- INFO-PANEL:END -->
         </div>
 
         <div class="card">
@@ -840,7 +869,12 @@
       button.className = on ? "green" : "red";
       button.dataset.state = on ? "ON" : "OFF";
       paintBandButtons(data.band || "UNKNOWN");
+      // INFO-PANEL
+      const ip = (String(data.ip_line || "").match(/\d+\.\d+\.\d+\.\d+/) || [])[0];
+      setPill("infoWifi", data.ssid ? data.ssid + (ip ? " · " + ip : "") : "Wi‑Fi non connecté",
+              data.ssid ? "ok" : "warn");
     } catch (_) {
+      setPill("infoWifi", "Wi‑Fi ?", "warn");
       $("wifiBtn").textContent = "Wi‑Fi local ?";
       $("wifiBtn").className = "orange";
       $("wifiBtn").dataset.state = "UNKNOWN";
@@ -1030,6 +1064,114 @@
       setTimeout(() => void refreshWifi(), 2500);
     }
   }
+
+  // INFO-PANEL:BEGIN — bandeau d'état + capteurs ToF eau (retrait : supprimer les blocs INFO-PANEL)
+  // Requêtes volontairement légères et séquentielles (mêmes précautions que la caméra),
+  // sans fetchJson : noteRtt() alimenterait à tort le voyant « Lien ».
+  // Seuils EAU identiques à ceux de /lidar_drive2 (LD2_WATER_*) : sol ~60 mm à sec,
+  // plafond ~600 mm à sec ; ces capteurs surveillent l'eau, pas les obstacles.
+  const INFO = {
+    floorLow: 40, floorHigh: 80, ceilLow: 400, ceilHigh: 800,
+    invalidAlertMs: 3000, maxAgeS: 5, pollMs: 2000, statusEvery: 3,
+    floorInvalidSince: null, ceilInvalidSince: null, tick: 0
+  };
+
+  async function infoGet(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const response = await fetch(url, {cache: "no-store", signal: controller.signal});
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function infoWater(label, id, value, sinceKey, low, high) {
+    // value = mm valide ou null ; alarme si hors plage ou invalide > 3 s.
+    if (value !== null) INFO[sinceKey] = null;
+    else if (INFO[sinceKey] === null) INFO[sinceKey] = Date.now();
+    const invalidTooLong = INFO[sinceKey] !== null && (Date.now() - INFO[sinceKey]) > INFO.invalidAlertMs;
+    if (value === null) {
+      setPill(id, label + " : ?", invalidTooLong ? "bad blink" : "warn");
+    } else {
+      const alert = value < low || value > high;
+      setPill(id, label + " : " + value + " mm", alert ? "bad blink" : "ok");
+    }
+  }
+
+  async function infoRefreshFloor() {
+    let mm = null;
+    try {
+      const j = await infoGet("/vl53l1x_json");
+      const d = j && j.data;
+      if (j && j.ok !== false && !(j.age_s > INFO.maxAgeS) && d && d.ok === true && d.valid === true
+          && typeof d.distance_mm === "number") mm = d.distance_mm;
+    } catch (_) {}
+    infoWater("SOL", "infoFloor", mm, "floorInvalidSince", INFO.floorLow, INFO.floorHigh);
+  }
+
+  async function infoRefreshCeiling() {
+    let mm = null, cells = null, valid = null;
+    try {
+      const j = await infoGet("/vl53l5cx_json");
+      const d = j && j.data;
+      if (j && j.ok !== false && !(j.age_s > INFO.maxAgeS) && d && d.ok === true
+          && typeof d.min_valid_distance_mm === "number") {
+        mm = d.min_valid_distance_mm;
+        cells = d.distance_mm;
+        valid = d.valid;
+      }
+    } catch (_) {}
+    infoWater("PLAFOND", "infoCeil", mm, "ceilInvalidSince", INFO.ceilLow, INFO.ceilHigh);
+    const grid = $("infoCeilGrid");
+    if (grid.children.length !== 16) {
+      grid.innerHTML = "<span>–</span>".repeat(16);
+    }
+    for (let i = 0; i < 16; i++) {
+      const cell = grid.children[i];
+      const ok = cells && valid && valid[i] === true && Number.isFinite(cells[i]);
+      cell.textContent = ok ? Math.round(cells[i] / 10) : "–";
+      cell.className = ok ? "" : "bad";
+    }
+  }
+
+  async function infoRefreshTilt() {
+    try {
+      const j = await infoGet("/imu_json");
+      const d = j && j.data;
+      if (!j || j.ok === false || !d || j.age_s > INFO.maxAgeS) throw new Error("imu");
+      const f = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1);
+      setPill("infoTilt", "R " + f(d.roll_deg) + "° · P " + f(d.pitch_deg) + "° · Cap " + Math.round(d.heading_deg) + "°", "ok");
+    } catch (_) {
+      setPill("infoTilt", "IMU ?", "warn");
+    }
+  }
+
+  async function infoRefreshSensors() {
+    try {
+      const j = await infoGet("/terrain_status");
+      const problems = [].concat(j.errors || [], j.warnings || []);
+      setPill("infoSensors", problems.length ? problems.join(", ") : "Capteurs OK",
+              j.level === "error" ? "bad" : (j.level === "warn" ? "warn" : "ok"));
+    } catch (_) {
+      setPill("infoSensors", "Capteurs ?", "warn");
+    }
+  }
+
+  async function infoLoop() {
+    if (!document.hidden) {
+      try {
+        await infoRefreshFloor();
+        await infoRefreshCeiling();
+        await infoRefreshTilt();
+        if (INFO.tick % INFO.statusEvery === 0) await infoRefreshSensors();
+        INFO.tick += 1;
+      } catch (_) {}
+    }
+    setTimeout(infoLoop, INFO.pollMs);
+  }
+  // INFO-PANEL:END
 
   async function lidarMapLoop() {
     if (state.lidarStopped) return;
@@ -1271,6 +1413,7 @@
     await updateVideoStatus();
     reloadCamera();
     lidarMapLoop();
+    setTimeout(infoLoop, 3000); // INFO-PANEL
   }
 
   window.addEventListener("blur", () => stopDrive("fenêtre inactive"));
