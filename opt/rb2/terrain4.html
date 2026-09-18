@@ -1061,13 +1061,9 @@
   // INFO-PANEL:BEGIN — bandeau d'état + capteurs ToF eau (retrait : supprimer les blocs INFO-PANEL)
   // Requêtes volontairement légères et séquentielles (mêmes précautions que la caméra),
   // sans fetchJson : noteRtt() alimenterait à tort le voyant « Lien ».
-  // Seuils EAU identiques à ceux de /lidar_drive2 (LD2_WATER_*) : sol ~60 mm à sec,
-  // plafond ~600 mm à sec ; ces capteurs surveillent l'eau, pas les obstacles.
-  const INFO = {
-    floorLow: 40, floorHigh: 80, ceilLow: 400, ceilHigh: 800,
-    invalidAlertMs: 3000, maxAgeS: 5, pollMs: 2000, statusEvery: 3,
-    floorInvalidSince: null, ceilInvalidSince: null, tick: 0
-  };
+  // SOL : affichage seul, sans alarme. PLAFOND : alarme à 70 mm et moins.
+  // (Ces capteurs ToF surveillent l'eau, pas les obstacles.)
+  const INFO = {ceilAlarmMm: 70, maxAgeS: 5, pollMs: 2000, statusEvery: 3, tick: 0};
 
   async function infoGet(url) {
     const controller = new AbortController();
@@ -1080,19 +1076,6 @@
     }
   }
 
-  function infoWater(label, id, value, sinceKey, low, high) {
-    // value = mm valide ou null ; alarme si hors plage ou invalide > 3 s.
-    if (value !== null) INFO[sinceKey] = null;
-    else if (INFO[sinceKey] === null) INFO[sinceKey] = Date.now();
-    const invalidTooLong = INFO[sinceKey] !== null && (Date.now() - INFO[sinceKey]) > INFO.invalidAlertMs;
-    if (value === null) {
-      setPill(id, label + " : ?", invalidTooLong ? "bad blink" : "warn");
-    } else {
-      const alert = value < low || value > high;
-      setPill(id, label + " : " + value + " mm", alert ? "bad blink" : "ok");
-    }
-  }
-
   async function infoRefreshFloor() {
     let mm = null;
     try {
@@ -1101,7 +1084,7 @@
       if (j && j.ok !== false && !(j.age_s > INFO.maxAgeS) && d && d.ok === true && d.valid === true
           && typeof d.distance_mm === "number") mm = d.distance_mm;
     } catch (_) {}
-    infoWater("SOL", "infoFloor", mm, "floorInvalidSince", INFO.floorLow, INFO.floorHigh);
+    setPill("infoFloor", "SOL : " + (mm === null ? "?" : mm + " mm"));
   }
 
   async function infoRefreshCeiling() {
@@ -1110,11 +1093,10 @@
       const j = await infoGet("/vl53l5cx_json");
       const d = j && j.data;
       if (j && j.ok !== false && !(j.age_s > INFO.maxAgeS) && d && d.ok === true
-          && typeof d.min_valid_distance_mm === "number") {
-        mm = d.min_valid_distance_mm;
-      }
+          && typeof d.min_valid_distance_mm === "number") mm = d.min_valid_distance_mm;
     } catch (_) {}
-    infoWater("PLAFOND", "infoCeil", mm, "ceilInvalidSince", INFO.ceilLow, INFO.ceilHigh);
+    if (mm === null) setPill("infoCeil", "PLAFOND : ?", "warn");
+    else setPill("infoCeil", "PLAFOND : " + mm + " mm", mm <= INFO.ceilAlarmMm ? "bad blink" : "ok");
   }
 
   // Horizon artificiel + niveaux roulis/tangage. Si le sens est inversé sur le robot
