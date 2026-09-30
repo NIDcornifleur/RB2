@@ -55,3 +55,17 @@ Avant toute modification, vérifier les documents dans `docs/` et conserver les 
 Ne pas modifier directement `main` pour les travaux de nettoyage.
 
 Travailler sur une branche dédiée, vérifier le diff, tester RB2, puis pousser vers GitHub.
+
+## Copie publique
+
+Ce dépôt est la copie publique du projet. Les valeurs propres à l'installation d'origine ont été remplacées et doivent être adaptées avant d'installer le code sur un autre robot :
+
+- `WIFI-MAISON-2.4G` / `WIFI-MAISON-5G` : nom du réseau Wi-Fi local ;
+- `wlxXXXXXXXXXXXX` : nom d'interface de la clé Wi-Fi du point d'accès `RB2-ROS` ;
+- `*****` : mots de passe Wi-Fi et OTA dans le firmware ESP32.
+
+Le pilote du LIDAR (`ros2/src/ldlidar_ros2`) est un sous-module : cloner avec `git clone --recurse-submodules`.
+
+## Licence
+
+Code publié sous licence MIT (voir `LICENSE`).
